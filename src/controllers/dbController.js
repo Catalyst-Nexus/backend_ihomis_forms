@@ -98,7 +98,7 @@ async function dbInfo(req, res) {
 
 async function getHenctrInfo(req, res, next) {
   try {
-    const { enccode, fhud, hpercode } = req.query;
+    const { enccode, fhud } = req.query;
     const parsedLimit = Number.parseInt(req.query.limit, 10);
     const parsedOffset = Number.parseInt(req.query.offset, 10);
 
@@ -118,15 +118,10 @@ async function getHenctrInfo(req, res, next) {
       params.push(fhud);
     }
 
-    if (hpercode) {
-      conditions.push('hpercode = ?');
-      params.push(hpercode);
-    }
-
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const [rows] = await pool.query(
-      `SELECT enccode, fhud, hpercode
+      `SELECT enccode, fhud
        FROM henctr
        ${whereClause}
        LIMIT ? OFFSET ?`,
@@ -139,7 +134,6 @@ async function getHenctrInfo(req, res, next) {
       filters: {
         enccode: enccode || null,
         fhud: fhud || null,
-        hpercode: hpercode || null,
       },
       pagination: {
         limit,

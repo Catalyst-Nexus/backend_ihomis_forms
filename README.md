@@ -28,13 +28,12 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 - `GET /api/db/status` - MySQL connection check
 - `GET /api/db/tables` - List database tables
 - `GET /api/db/info` - Database name and facility code discovery info
-- `GET /api/db/henctr` - Fetch `enccode`, `fhud`, `hpercode` from `henctr`
+- `GET /api/db/henctr` - Fetch `enccode` and `fhud` from `henctr`
 
 ### Query params for `/api/db/henctr`
 
 - `enccode` (recommended) - Filter by encounter code
 - `fhud` (recommended) - Filter by facility id
-- `hpercode` (recommended) - Filter by patient code
 - `limit` (optional, default `100`, max `500`)
 - `offset` (optional, default `0`)
 
@@ -42,7 +41,6 @@ The response `data` rows contain only these fields:
 
 - `enccode`
 - `fhud`
-- `hpercode`
 
 ## Coolify Deployment
 
@@ -84,12 +82,11 @@ Set Coolify health check to:
 2. Add query parameters:
     - `enccode`
     - `fhud`
-    - `hpercode`
 3. Send request.
 
 Example URL:
 
-`http://localhost:3000/api/db/henctr?enccode=TEST-ENC&fhud=TEST-FHUD&hpercode=TEST-HPER`
+`http://localhost:3000/api/db/henctr?enccode=TEST-ENC&fhud=TEST-FHUD`
 
 ### Example Postman Tests Script
 
@@ -106,7 +103,6 @@ pm.test('Response shape is correct', function () {
    pm.expect(body).to.have.property('filters');
    pm.expect(body.filters).to.have.property('enccode');
    pm.expect(body.filters).to.have.property('fhud');
-   pm.expect(body.filters).to.have.property('hpercode');
 });
 ```
 
