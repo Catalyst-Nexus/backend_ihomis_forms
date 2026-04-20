@@ -28,7 +28,7 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 - `GET /api/db/status` - MySQL connection check
 - `GET /api/db/tables` - List database tables
 - `GET /api/db/info` - Database name and facility code discovery info
-- `GET /api/db/henctr` - Fetch `enccode` and `fhud` from `henctr`
+- `GET /api/db/henctr` - Fetch connected `hdocord` + `henctr` rows with `enccode`, `fhud`, and `docointkey`
 
 ### Query params for `/api/db/henctr`
 
@@ -37,10 +37,11 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 - `limit` (optional, default `100`, max `500`)
 - `offset` (optional, default `0`)
 
-The response `data` rows contain only these fields:
+The response `data` rows contain these fields:
 
 - `enccode`
 - `fhud`
+- `docointkey`
 
 ## Coolify Deployment
 

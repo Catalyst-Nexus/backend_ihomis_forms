@@ -105,24 +105,25 @@ async function getHenctrInfo(req, res, next) {
     const limit = Number.isNaN(parsedLimit) ? 100 : Math.min(Math.max(parsedLimit, 1), 500);
     const offset = Number.isNaN(parsedOffset) ? 0 : Math.max(parsedOffset, 0);
 
-    const conditions = [];
+    const conditions = ['hdocord.docointkey IS NOT NULL', "hdocord.docointkey <> ''"];
     const params = [];
 
     if (enccode) {
-      conditions.push('enccode = ?');
+      conditions.push('hdocord.enccode = ?');
       params.push(enccode);
     }
 
     if (fhud) {
-      conditions.push('fhud = ?');
+      conditions.push('henctr.fhud = ?');
       params.push(fhud);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const [rows] = await pool.query(
-      `SELECT enccode, fhud
-       FROM henctr
+      `SELECT hdocord.enccode, henctr.fhud, hdocord.docointkey
+       FROM hdocord
+       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
        ${whereClause}
        LIMIT ? OFFSET ?`,
       [...params, limit, offset]
