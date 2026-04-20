@@ -10,11 +10,11 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 ## Setup
 
 1. Install dependencies:
-   npm install
+   `npm install`
 2. Create environment file:
    Copy `.env.example` to `.env` and update values.
 3. Start development server:
-   npm run dev
+   `npm run dev`
 
 ## Available Scripts
 
@@ -32,11 +32,83 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 
 ### Query params for `/api/db/henctr`
 
-- `enccode` (optional) - Filter by encounter code
-- `fhud` (optional) - Filter by facility id
-- `hpercode` (optional) - Filter by patient code
+- `enccode` (recommended) - Filter by encounter code
+- `fhud` (recommended) - Filter by facility id
+- `hpercode` (recommended) - Filter by patient code
 - `limit` (optional, default `100`, max `500`)
 - `offset` (optional, default `0`)
+
+The response `data` rows contain only these fields:
+
+- `enccode`
+- `fhud`
+- `hpercode`
+
+## Coolify Deployment
+
+This project is ready for Coolify deployment.
+
+### Option A: Node.js / Nixpacks (no Dockerfile required)
+
+- Build command: `npm install`
+- Start command: `npm start`
+- Port: `3000` (or use Coolify `PORT` env)
+
+### Option B: Dockerfile
+
+A production Dockerfile is included in this repository.
+
+- Dockerfile path: `Dockerfile`
+- Exposed container port: `3000`
+- Startup command: `npm start`
+
+### Required Environment Variables in Coolify
+
+- `PORT` (optional, defaults to `3000`)
+- `MYSQL_HOST`
+- `MYSQL_PORT` (optional, defaults to `3306`)
+- `MYSQL_USER`
+- `MYSQL_PASSWORD`
+- `MYSQL_DATABASE`
+
+### Health Check
+
+Set Coolify health check to:
+
+- `GET /api/health`
+
+## Postman Quick Test
+
+1. Create a `GET` request:
+    - URL: `{{baseUrl}}/api/db/henctr`
+2. Add query parameters:
+    - `enccode`
+    - `fhud`
+    - `hpercode`
+3. Send request.
+
+Example URL:
+
+`http://localhost:3000/api/db/henctr?enccode=TEST-ENC&fhud=TEST-FHUD&hpercode=TEST-HPER`
+
+### Example Postman Tests Script
+
+```javascript
+pm.test('Status code is 200', function () {
+   pm.response.to.have.status(200);
+});
+
+pm.test('Response shape is correct', function () {
+   const body = pm.response.json();
+
+   pm.expect(body).to.have.property('ok', true);
+   pm.expect(body).to.have.property('data').that.is.an('array');
+   pm.expect(body).to.have.property('filters');
+   pm.expect(body.filters).to.have.property('enccode');
+   pm.expect(body.filters).to.have.property('fhud');
+   pm.expect(body.filters).to.have.property('hpercode');
+});
+```
 
 ## Notes
 
