@@ -5,68 +5,72 @@ function escapeIdentifier(identifier) {
 }
 
 function mapSex(sexCode) {
-  if (!sexCode) return '';
+  if (!sexCode) return "";
   const code = String(sexCode).toUpperCase();
-  if (code === 'M' || code === 'MALE' || code === '1') return 'male';
-  if (code === 'F' || code === 'FEMALE' || code === '2') return 'female';
-  return 'unknown';
+  if (code === "M" || code === "MALE" || code === "1") return "male";
+  if (code === "F" || code === "FEMALE" || code === "2") return "female";
+  return "unknown";
 }
 
 function formatDate(date) {
-  if (!date) return '';
+  if (!date) return "";
   try {
     const parsed = new Date(date);
-    return parsed.toISOString().split('T')[0];
+    return parsed.toISOString().split("T")[0];
   } catch {
-    return '';
+    return "";
   }
 }
 
 function mapPatientRow(row) {
   return {
-    id: row.hpercode || '',
-    hpercode: row.hpercode || '',
-    first_name: row.patfirst || '',
-    middle_name: row.patmiddle || '',
-    last_name: row.patlast || '',
-    ext_name: row.patsuffix || '',
+    id: row.hpercode || "",
+    hpercode: row.hpercode || "",
+    first_name: row.patfirst || "",
+    middle_name: row.patmiddle || "",
+    last_name: row.patlast || "",
+    ext_name: row.patsuffix || "",
     sex: mapSex(row.patsex),
     birth_date: formatDate(row.patbdate),
-    facility_code: row.hfhudcode || '',
-    facility_name: row.facility_name || '',
-    created_at: '',
-    brgy: row.bgycode || '',
-    brgy_name: row.bgyname || '',
-    street: row.patstr || '',
-    city_code: row.ctycode || '',
-    city_name: row.ctyname || '',
-    province_code: row.provcode || '',
-    province_name: row.provname || '',
-    region_name: row.regname || '',
-    zip_code: row.patzip || '',
+    facility_code: row.hfhudcode || "",
+    facility_name: row.facility_name || "",
+    created_at: "",
+    brgy: row.bgycode || "",
+    brgy_name: row.bgyname || "",
+    street: row.patstr || "",
+    city_code: row.ctycode || "",
+    city_name: row.ctyname || "",
+    province_code: row.provcode || "",
+    province_name: row.provname || "",
+    region_name: row.regname || "",
+    zip_code: row.patzip || "",
   };
 }
 
 const RECORD_CONFIGS = [
-  { key: 'other_details', table: 'hvsothr' },
-  { key: 'vital_signs', table: 'hvitalsign', single: true },
-  { key: 'medical_history', table: 'hmrhisto' },
-  { key: 'signs_and_symptoms', table: 'hsignsymptoms' },
-  { key: 'symptom_physical_others', table: 'hpesignsothers' },
-  { key: 'physical_exam', table: 'hphyexam' },
-  { key: 'system_review', table: 'hmrsrev' },
-  { key: 'ward_course', table: 'hcrsward' },
-  { key: 'diagnoses', table: 'hencdiag' },
-  { key: 'doctor_orders_medication', table: 'hrxo' },
-  { key: 'medical_supplies', table: 'hrqd' },
-  { key: 'doctor_orders_exams', table: 'hdocord', sql: "SELECT * FROM hdocord WHERE enccode = ? AND estatus = 'S'" },
+  { key: "other_details", table: "hvsothr" },
+  { key: "vital_signs", table: "hvitalsign", single: true },
+  { key: "medical_history", table: "hmrhisto" },
+  { key: "signs_and_symptoms", table: "hsignsymptoms" },
+  { key: "symptom_physical_others", table: "hpesignsothers" },
+  { key: "physical_exam", table: "hphyexam" },
+  { key: "system_review", table: "hmrsrev" },
+  { key: "ward_course", table: "hcrsward" },
+  { key: "diagnoses", table: "hencdiag" },
+  { key: "doctor_orders_medication", table: "hrxo" },
+  { key: "medical_supplies", table: "hrqd" },
+  {
+    key: "doctor_orders_exams",
+    table: "hdocord",
+    sql: "SELECT * FROM hdocord WHERE enccode = ? AND estatus = 'S'",
+  },
 ];
 
 const CHRONOLOGICAL_TABLE_KEYS = new Set([
-  'ward_course',
-  'doctor_orders_medication',
-  'medical_supplies',
-  'doctor_orders_exams',
+  "ward_course",
+  "doctor_orders_medication",
+  "medical_supplies",
+  "doctor_orders_exams",
 ]);
 
 const DISCHARGE_REGEX = /disch(?:arge)?/i;
@@ -87,7 +91,7 @@ function toTimestamp(value, time) {
     return null;
   }
 
-  const combined = [value, time].filter(Boolean).join(' ');
+  const combined = [value, time].filter(Boolean).join(" ");
   const parsed = new Date(combined);
 
   if (!Number.isNaN(parsed.getTime())) {
@@ -103,12 +107,12 @@ function sortRowsByDateTime(rows) {
   }
 
   const keys = Object.keys(rows[0]);
-  const dateKey = findMatchingKey(keys, (name) => name.includes('date'));
+  const dateKey = findMatchingKey(keys, (name) => name.includes("date"));
   if (!dateKey) {
     return rows;
   }
 
-  const timeKey = findMatchingKey(keys, (name) => name.includes('time'));
+  const timeKey = findMatchingKey(keys, (name) => name.includes("time"));
 
   return [...rows].sort((a, b) => {
     const aTs = toTimestamp(a[dateKey], timeKey ? a[timeKey] : null);
@@ -134,12 +138,14 @@ function filterDischargeOrders(rows) {
   }
 
   const keys = Object.keys(rows[0]);
-  const descriptionKey = findMatchingKey(keys, (name) => name.includes('desc'));
+  const descriptionKey = findMatchingKey(keys, (name) => name.includes("desc"));
   if (!descriptionKey) {
     return rows;
   }
 
-  return rows.filter((row) => !DISCHARGE_REGEX.test(String(row[descriptionKey] ?? '').trim()));
+  return rows.filter(
+    (row) => !DISCHARGE_REGEX.test(String(row[descriptionKey] ?? "").trim()),
+  );
 }
 
 async function fetchEncounterRecords(enccode) {
@@ -150,16 +156,21 @@ async function fetchEncounterRecords(enccode) {
     const sql = config.sql ?? `SELECT * FROM ${config.table} WHERE enccode = ?`;
     try {
       const [rows] = await pool.query(sql, [enccode]);
-      records[config.key] = config.single ? rows[0] ?? null : rows;
+      records[config.key] = config.single ? (rows[0] ?? null) : rows;
     } catch (error) {
       warnings.push({ table: config.table, message: error.message });
       records[config.key] = config.single ? null : [];
-      console.warn(`Encounter records query failed for ${config.table}:`, error.message);
+      console.warn(
+        `Encounter records query failed for ${config.table}:`,
+        error.message,
+      );
     }
   }
 
   if (Array.isArray(records.doctor_orders_exams)) {
-    records.doctor_orders_exams = filterDischargeOrders(records.doctor_orders_exams);
+    records.doctor_orders_exams = filterDischargeOrders(
+      records.doctor_orders_exams,
+    );
   }
 
   CHRONOLOGICAL_TABLE_KEYS.forEach((key) => {
@@ -327,27 +338,34 @@ async function getHenctrInfo(req, res, next) {
 async function getPatientList(req, res, next) {
   try {
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.parseInt(req.query.limit, 10) || 20),
+    );
     const offset = (page - 1) * limit;
 
-    const name = String(req.query.name || '').trim();
-    const facility = String(req.query.facility || '').trim();
+    const name = String(req.query.name || "").trim();
+    const facility = String(req.query.facility || "").trim();
 
     const conditions = [];
     const params = [];
 
     if (name) {
       const searchTerm = `%${name}%`;
-      conditions.push('(p.patlast LIKE ? OR p.patfirst LIKE ? OR p.patmiddle LIKE ? OR p.hpercode LIKE ?)');
+      conditions.push(
+        "(p.patlast LIKE ? OR p.patfirst LIKE ? OR p.patmiddle LIKE ? OR p.hpercode LIKE ?)",
+      );
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (facility) {
-      conditions.push('p.hfhudcode = ?');
+      conditions.push("p.hfhudcode = ?");
       params.push(facility);
     }
 
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
 
     const dataQuery = `
       SELECT
@@ -413,19 +431,21 @@ async function getPatientList(req, res, next) {
 
 async function getPatientHistory(req, res, next) {
   try {
-    const hpercode = String(req.params.hpercode || '').trim();
+    const hpercode = String(req.params.hpercode || "").trim();
     const parsedLimit = Number.parseInt(req.query.limit, 10);
     const parsedOffset = Number.parseInt(req.query.offset, 10);
 
-    const limit = Number.isNaN(parsedLimit) ? 50 : Math.min(Math.max(parsedLimit, 1), 200);
+    const limit = Number.isNaN(parsedLimit)
+      ? 50
+      : Math.min(Math.max(parsedLimit, 1), 200);
     const offset = Number.isNaN(parsedOffset) ? 0 : Math.max(parsedOffset, 0);
-    const startDate = String(req.query.startDate || '').trim();
-    const endDate = String(req.query.endDate || '').trim();
+    const startDate = String(req.query.startDate || "").trim();
+    const endDate = String(req.query.endDate || "").trim();
 
     if (!hpercode) {
       return res.status(400).json({
         ok: false,
-        message: 'hpercode is required',
+        message: "hpercode is required",
       });
     }
 
@@ -524,28 +544,28 @@ async function getPatientHistory(req, res, next) {
     const params = [hpercode];
 
     if (startDate) {
-      query += ' AND a.admdate >= ?';
+      query += " AND a.admdate >= ?";
       params.push(startDate);
     }
 
     if (endDate) {
-      query += ' AND a.admdate <= ?';
+      query += " AND a.admdate <= ?";
       params.push(endDate);
     }
 
-    query += ' ORDER BY a.admdate DESC, a.admtime DESC LIMIT ? OFFSET ?';
+    query += " ORDER BY a.admdate DESC, a.admtime DESC LIMIT ? OFFSET ?";
     params.push(limit, offset);
 
-    let countQuery = 'SELECT COUNT(*) AS total FROM hadmlog WHERE hpercode = ?';
+    let countQuery = "SELECT COUNT(*) AS total FROM hadmlog WHERE hpercode = ?";
     const countParams = [hpercode];
 
     if (startDate) {
-      countQuery += ' AND admdate >= ?';
+      countQuery += " AND admdate >= ?";
       countParams.push(startDate);
     }
 
     if (endDate) {
-      countQuery += ' AND admdate <= ?';
+      countQuery += " AND admdate <= ?";
       countParams.push(endDate);
     }
 
@@ -576,13 +596,13 @@ async function getPatientHistory(req, res, next) {
 
 async function getPatientEncounterRecords(req, res, next) {
   try {
-    const hpercode = String(req.params.hpercode || '').trim();
-    const enccode = String(req.params.enccode || '').trim();
+    const hpercode = String(req.params.hpercode || "").trim();
+    const enccode = String(req.params.enccode || "").trim();
 
     if (!hpercode || !enccode) {
       return res.status(400).json({
         ok: false,
-        message: 'Both hpercode and enccode are required',
+        message: "Both hpercode and enccode are required",
       });
     }
 
@@ -612,27 +632,34 @@ async function getPatientEncounterRecords(req, res, next) {
 async function getPatientList(req, res, next) {
   try {
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.parseInt(req.query.limit, 10) || 20),
+    );
     const offset = (page - 1) * limit;
 
-    const name = String(req.query.name || '').trim();
-    const facility = String(req.query.facility || '').trim();
+    const name = String(req.query.name || "").trim();
+    const facility = String(req.query.facility || "").trim();
 
     const conditions = [];
     const params = [];
 
     if (name) {
       const searchTerm = `%${name}%`;
-      conditions.push('(p.patlast LIKE ? OR p.patfirst LIKE ? OR p.patmiddle LIKE ? OR p.hpercode LIKE ?)');
+      conditions.push(
+        "(p.patlast LIKE ? OR p.patfirst LIKE ? OR p.patmiddle LIKE ? OR p.hpercode LIKE ?)",
+      );
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (facility) {
-      conditions.push('p.hfhudcode = ?');
+      conditions.push("p.hfhudcode = ?");
       params.push(facility);
     }
 
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
 
     const dataQuery = `
       SELECT
@@ -698,19 +725,21 @@ async function getPatientList(req, res, next) {
 
 async function getPatientHistory(req, res, next) {
   try {
-    const hpercode = String(req.params.hpercode || '').trim();
+    const hpercode = String(req.params.hpercode || "").trim();
     const parsedLimit = Number.parseInt(req.query.limit, 10);
     const parsedOffset = Number.parseInt(req.query.offset, 10);
 
-    const limit = Number.isNaN(parsedLimit) ? 50 : Math.min(Math.max(parsedLimit, 1), 200);
+    const limit = Number.isNaN(parsedLimit)
+      ? 50
+      : Math.min(Math.max(parsedLimit, 1), 200);
     const offset = Number.isNaN(parsedOffset) ? 0 : Math.max(parsedOffset, 0);
-    const startDate = String(req.query.startDate || '').trim();
-    const endDate = String(req.query.endDate || '').trim();
+    const startDate = String(req.query.startDate || "").trim();
+    const endDate = String(req.query.endDate || "").trim();
 
     if (!hpercode) {
       return res.status(400).json({
         ok: false,
-        message: 'hpercode is required',
+        message: "hpercode is required",
       });
     }
 
@@ -809,28 +838,28 @@ async function getPatientHistory(req, res, next) {
     const params = [hpercode];
 
     if (startDate) {
-      query += ' AND a.admdate >= ?';
+      query += " AND a.admdate >= ?";
       params.push(startDate);
     }
 
     if (endDate) {
-      query += ' AND a.admdate <= ?';
+      query += " AND a.admdate <= ?";
       params.push(endDate);
     }
 
-    query += ' ORDER BY a.admdate DESC, a.admtime DESC LIMIT ? OFFSET ?';
+    query += " ORDER BY a.admdate DESC, a.admtime DESC LIMIT ? OFFSET ?";
     params.push(limit, offset);
 
-    let countQuery = 'SELECT COUNT(*) AS total FROM hadmlog WHERE hpercode = ?';
+    let countQuery = "SELECT COUNT(*) AS total FROM hadmlog WHERE hpercode = ?";
     const countParams = [hpercode];
 
     if (startDate) {
-      countQuery += ' AND admdate >= ?';
+      countQuery += " AND admdate >= ?";
       countParams.push(startDate);
     }
 
     if (endDate) {
-      countQuery += ' AND admdate <= ?';
+      countQuery += " AND admdate <= ?";
       countParams.push(endDate);
     }
 
@@ -861,13 +890,13 @@ async function getPatientHistory(req, res, next) {
 
 async function getPatientEncounterRecords(req, res, next) {
   try {
-    const hpercode = String(req.params.hpercode || '').trim();
-    const enccode = String(req.params.enccode || '').trim();
+    const hpercode = String(req.params.hpercode || "").trim();
+    const enccode = String(req.params.enccode || "").trim();
 
     if (!hpercode || !enccode) {
       return res.status(400).json({
         ok: false,
-        message: 'Both hpercode and enccode are required',
+        message: "Both hpercode and enccode are required",
       });
     }
 
@@ -896,7 +925,7 @@ async function getPatientEncounterRecords(req, res, next) {
 
 async function searchPatients(req, res, next) {
   try {
-    const { search, q, user, fhud, enccode } = req.query;
+    const { search, q, user, fhud, enccode, docointkey } = req.query;
     const parsedLimit = Number.parseInt(req.query.limit, 10);
     const parsedOffset = Number.parseInt(req.query.offset, 10);
     const limit = Number.isNaN(parsedLimit)
@@ -921,6 +950,11 @@ async function searchPatients(req, res, next) {
       params.push(enccode);
     }
 
+    if (docointkey) {
+      conditions.push("hdocord.docointkey = ?");
+      params.push(docointkey);
+    }
+
     if (keyword) {
       conditions.push(
         "(" +
@@ -942,6 +976,9 @@ async function searchPatients(req, res, next) {
 
     const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
+    const countQuery = `SELECT COUNT(*) AS total FROM hdocord INNER JOIN henctr ON henctr.enccode = hdocord.enccode LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode ${whereClause}`;
+    const [[{ total }]] = await pool.query(countQuery, params);
+
     const [rows] = await pool.query(
       `SELECT
          hdocord.enccode,
@@ -962,7 +999,7 @@ async function searchPatients(req, res, next) {
     res.json({
       ok: true,
       count: rows.length,
-      pagination: { limit, offset },
+      pagination: { limit, offset, total },
       filters: {
         search: keyword || null,
         user: user || null,
@@ -980,6 +1017,7 @@ module.exports = {
   listTables,
   dbInfo,
   getHenctrInfo,
+  searchPatients,
   getPatientList,
   getPatientHistory,
   getPatientEncounterRecords,
