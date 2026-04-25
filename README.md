@@ -29,6 +29,9 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 - `GET /api/db/tables` - List database tables
 - `GET /api/db/info` - Database name and facility code discovery info
 - `GET /api/db/henctr` - Fetch `enccode` and `fhud` from `henctr`
+- `GET /api/db/patients` - Fetch paginated patient list with optional filters
+- `GET /api/db/patients/history/:hpercode` - Fetch admission and encounter history for a patient
+- `GET /api/db/patients/:hpercode/encounters/:enccode/records` - Fetch encounter-level clinical records
 
 ### Query params for `/api/db/henctr`
 
@@ -41,6 +44,40 @@ The response `data` rows contain only these fields:
 
 - `enccode`
 - `fhud`
+
+### Query params for `/api/db/patients`
+
+- `page` (optional, default `1`)
+- `limit` (optional, default `20`, max `100`)
+- `name` (optional) - Matches patient last/first/middle name or `hpercode`
+- `facility` (optional) - Exact `hfhudcode` filter
+
+### Query params for `/api/db/patients/history/:hpercode`
+
+- `limit` (optional, default `50`, max `200`)
+- `offset` (optional, default `0`)
+- `startDate` (optional) - Inclusive admission date lower bound
+- `endDate` (optional) - Inclusive admission date upper bound
+
+### Path params for `/api/db/patients/:hpercode/encounters/:enccode/records`
+
+- `hpercode` - Patient code
+- `enccode` - Encounter code
+
+This endpoint returns grouped encounter records with keys like:
+
+- `other_details`
+- `vital_signs`
+- `medical_history`
+- `signs_and_symptoms`
+- `symptom_physical_others`
+- `physical_exam`
+- `system_review`
+- `ward_course`
+- `diagnoses`
+- `doctor_orders_medication`
+- `medical_supplies`
+- `doctor_orders_exams` (filtered to remove discharge-related descriptions)
 
 ## Coolify Deployment
 
