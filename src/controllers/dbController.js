@@ -733,18 +733,62 @@ async function searchPatients(req, res, next) {
          hdocord.enccode,
          henctr.fhud,
          hdocord.docointkey,
-        hdocord.entryby AS user,
-         hperson.patfirst AS firstName,
-         hperson.patmiddle AS middleName,
-         hperson.patlast AS lastName
+         hdocord.entryby AS user,
+         hperson.hpercode,
+         hperson.patlast,
+         hperson.patfirst,
+         hperson.patmiddle,
+         hperson.patsuffix,
+         hperson.patsex,
+         hperson.patbdate,
+         hperson.hfhudcode,
+         hperson.patbplace,
+         hperson.patcstat,
+         hperson.natcode,
+         hperson.relcode,
+         hperson.pattelno,
+         hperson.fatlast,
+         hperson.fatmid,
+         hperson.fatfirst,
+         hperson.motlast,
+         hperson.motfirt,
+         hperson.motmid,
+         hperson.patempstat,
+         fh.hfhudname AS facility_name,
+         a.brg AS bgycode,
+         a.patstr,
+         a.ctycode,
+         a.provcode,
+         a.patzip,
+         b.bgyname,
+         c.ctyname,
+         pv.provname,
+         r.regname
        FROM hdocord
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
        LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
+       LEFT JOIN haddr a ON hperson.hpercode = a.hpercode
+       LEFT JOIN hbrgy b ON a.brg = b.bgycode
+       LEFT JOIN hcity c ON a.ctycode = c.ctycode
+       LEFT JOIN hprov pv ON a.provcode = pv.provcode
+       LEFT JOIN hregion r ON c.ctyreg = r.regcode
+       LEFT JOIN fhud_hospital fh ON hperson.hfhudcode = fh.hfhudcode
        ${whereClause}
        ORDER BY hdocord.docointkey DESC
        LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
+
+    const data = rows.map((row) => ({
+      ...mapPatientRow(row),
+      enccode: row.enccode || "",
+      fhud: row.fhud || "",
+      docointkey: row.docointkey || "",
+      user: row.user || "",
+      firstName: row.patfirst || "",
+      middleName: row.patmiddle || "",
+      lastName: row.patlast || "",
+    }));
 
     res.json({
       ok: true,
@@ -757,7 +801,7 @@ async function searchPatients(req, res, next) {
         enccode: enccode || null,
         docointkey: docointkey || null,
       },
-      data: rows,
+      data,
     });
   } catch (error) {
     next(error);
