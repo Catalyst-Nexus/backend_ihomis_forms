@@ -8,6 +8,7 @@ const {
   getPatientList,
   getPatientHistory,
   getPatientEncounterRecords,
+  getBabyForm,
 } = require("../controllers/dbController");
 
 const router = express.Router();
@@ -22,5 +23,6 @@ router.get(
   "/patients/:hpercode/encounters/:enccode/records",
   getPatientEncounterRecords,
 );
+router.get("/forms/baby", getBabyForm);
 
 module.exports = router;

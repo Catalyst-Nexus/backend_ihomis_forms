@@ -33,6 +33,7 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 - `GET /api/db/patients` - Fetch paginated patient list with optional filters
 - `GET /api/db/patients/history/:hpercode` - Fetch admission and encounter history for a patient
 - `GET /api/db/patients/:hpercode/encounters/:enccode/records` - Fetch encounter-level clinical records
+- `GET /api/db/forms/baby` - Fetch baby/child form header fields from iHOMIS maternal-newborn tables
 
 ### Query params for `/api/db/henctr`
 
@@ -89,6 +90,35 @@ This endpoint returns grouped encounter records with keys like:
 - `doctor_orders_medication`
 - `medical_supplies`
 - `doctor_orders_exams` (filtered to remove discharge-related descriptions)
+
+### Query params for `/api/db/forms/baby`
+
+- `enccode` (optional if `babyHpercode` is provided) - Encounter code from newborn record
+- `babyHpercode` (optional if `enccode` is provided) - Baby patient code from `hnewborn.hpercode`
+
+This endpoint returns frontend-ready fields for the baby/child form header:
+
+- `baby_name`
+- `baby_sex`
+- `baby_age`
+- `mother_name`
+- `mother_sex`
+- `hospital_no`
+- `complete_address`
+- `type_of_delivery`
+- `obstetrician`
+- `anesthesia`
+- `anesthesiologist`
+
+Data source mapping used by this endpoint:
+
+- baby details: `hnewborn`
+- mother details: `henctr` + `hperson`
+- hospital number: `COALESCE(hadmlog.pho_hospital_number, henctr.fhud)`
+- address: `haddr` + `hbrgy` + `hcity` + `hprov` + `hregion`
+- delivery info: `hdelivery`
+- obstetrician: `hpostpartum.attenddr` + `hprovider` + `hpersonal`
+- anesthesia/anesthesiologist: `hproclog` + `hprovider` + `hpersonal`
 
 ## Coolify Deployment
 
