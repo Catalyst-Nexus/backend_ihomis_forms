@@ -38,6 +38,8 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 
 - `enccode` (recommended) - Filter by encounter code
 - `fhud` (recommended) - Filter by facility id
+- `docointkey` (optional) - Exact document key filter
+- `user` (optional) - Exact `hdocord.entryby` filter
 - `limit` (optional, default `100`, max `500`)
 - `offset` (optional, default `0`)
 
@@ -46,13 +48,20 @@ The response `data` rows contain these fields:
 - `enccode`
 - `fhud`
 - `docointkey`
+- `user`
+- `firstName`
+- `middleName`
+- `lastName`
 
 ### Query params for `/api/db/patients`
 
-- `page` (optional, default `1`)
-- `limit` (optional, default `20`, max `100`)
-- `name` (optional) - Matches patient last/first/middle name or `hpercode`
-- `facility` (optional) - Exact `hfhudcode` filter
+- `search` or `q` (optional) - Matches `enccode`, `fhud`, `docointkey`, or full patient name
+- `user` (optional) - Exact `hdocord.entryby` filter
+- `fhud` (optional) - Exact `henctr.fhud` filter
+- `enccode` (optional) - Exact `hdocord.enccode` filter
+- `docointkey` (optional) - Exact `hdocord.docointkey` filter
+- `limit` (optional, default `25`, max `200`)
+- `offset` (optional, default `0`)
 
 ### Query params for `/api/db/patients/history/:hpercode`
 
@@ -117,10 +126,10 @@ Set Coolify health check to:
 ## Postman Quick Test
 
 1. Create a `GET` request:
-    - URL: `{{baseUrl}}/api/db/henctr`
+   - URL: `{{baseUrl}}/api/db/henctr`
 2. Add query parameters:
-    - `enccode`
-    - `fhud`
+   - `enccode`
+   - `fhud`
 3. Send request.
 
 Example URL:
@@ -130,18 +139,18 @@ Example URL:
 ### Example Postman Tests Script
 
 ```javascript
-pm.test('Status code is 200', function () {
-   pm.response.to.have.status(200);
+pm.test("Status code is 200", function () {
+  pm.response.to.have.status(200);
 });
 
-pm.test('Response shape is correct', function () {
-   const body = pm.response.json();
+pm.test("Response shape is correct", function () {
+  const body = pm.response.json();
 
-   pm.expect(body).to.have.property('ok', true);
-   pm.expect(body).to.have.property('data').that.is.an('array');
-   pm.expect(body).to.have.property('filters');
-   pm.expect(body.filters).to.have.property('enccode');
-   pm.expect(body.filters).to.have.property('fhud');
+  pm.expect(body).to.have.property("ok", true);
+  pm.expect(body).to.have.property("data").that.is.an("array");
+  pm.expect(body).to.have.property("filters");
+  pm.expect(body.filters).to.have.property("enccode");
+  pm.expect(body.filters).to.have.property("fhud");
 });
 ```
 

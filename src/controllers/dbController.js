@@ -280,7 +280,7 @@ async function dbInfo(req, res) {
 
 async function getHenctrInfo(req, res, next) {
   try {
-    const { enccode, fhud } = req.query;
+    const { enccode, fhud, docointkey, user } = req.query;
     const parsedLimit = Number.parseInt(req.query.limit, 10);
     const parsedOffset = Number.parseInt(req.query.offset, 10);
 
@@ -305,13 +305,31 @@ async function getHenctrInfo(req, res, next) {
       params.push(fhud);
     }
 
+    if (docointkey) {
+      conditions.push("hdocord.docointkey = ?");
+      params.push(docointkey);
+    }
+
+    if (user) {
+      conditions.push("hdocord.entryby = ?");
+      params.push(user);
+    }
+
     const whereClause =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const [rows] = await pool.query(
-      `SELECT hdocord.enccode, henctr.fhud, hdocord.docointkey
+      `SELECT
+         hdocord.enccode,
+         henctr.fhud,
+         hdocord.docointkey,
+         hdocord.entryby AS user,
+         hperson.patfirst AS firstName,
+         hperson.patmiddle AS middleName,
+         hperson.patlast AS lastName
        FROM hdocord
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
+       LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
        ${whereClause}
        LIMIT ? OFFSET ?`,
       [...params, limit, offset],
@@ -323,6 +341,8 @@ async function getHenctrInfo(req, res, next) {
       filters: {
         enccode: enccode || null,
         fhud: fhud || null,
+        docointkey: docointkey || null,
+        user: user || null,
       },
       pagination: {
         limit,
@@ -969,7 +989,6 @@ async function searchPatients(req, res, next) {
     }
 
     if (user) {
-      // Replace hdocord.entryby with your actual username column in hdocord
       conditions.push("hdocord.entryby = ?");
       params.push(user);
     }
@@ -984,6 +1003,7 @@ async function searchPatients(req, res, next) {
          hdocord.enccode,
          henctr.fhud,
          hdocord.docointkey,
+        hdocord.entryby AS user,
          hperson.patfirst AS firstName,
          hperson.patmiddle AS middleName,
          hperson.patlast AS lastName
@@ -1005,6 +1025,7 @@ async function searchPatients(req, res, next) {
         user: user || null,
         fhud: fhud || null,
         enccode: enccode || null,
+        docointkey: docointkey || null,
       },
       data: rows,
     });
