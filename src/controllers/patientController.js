@@ -44,7 +44,7 @@ async function getPatientList(req, res, next) {
         p.patlast AS last_name,
         p.patfirst AS first_name,
         p.patmiddle AS middle_name,
-        CONCAT_WS(' ', p.patlast, p.patfirst, p.patmiddle) AS patients_name,
+        CONCAT_WS(' ', p.patlast, p.patfirst, p.patmiddle) AS patient_name,
         p.patsuffix AS suffix,
         p.patsex AS sex,
         p.patbdate AS birth_date,
@@ -73,6 +73,7 @@ async function getPatientList(req, res, next) {
         c.ctyname AS city_name,
         pv.provname AS province_name,
         r.regname AS region_name,
+        CONCAT_WS(', ', a.patstr, b.bgyname, c.ctyname, pv.provname, r.regname, a.patzip) AS patient_address,
         (
           SELECT ht.pattel
           FROM htelep ht
@@ -427,7 +428,7 @@ async function searchPatients(req, res, next) {
          hperson.patlast,
          hperson.patfirst,
          hperson.patmiddle,
-         CONCAT_WS(' ', hperson.patlast, hperson.patfirst, hperson.patmiddle) AS patients_name,
+         CONCAT_WS(' ', hperson.patlast, hperson.patfirst, hperson.patmiddle) AS patient_name,
          hperson.patsuffix,
          hperson.patsex,
          hperson.patbdate,
@@ -456,6 +457,7 @@ async function searchPatients(req, res, next) {
          c.ctyname,
          pv.provname,
          r.regname,
+         CONCAT_WS(', ', a.patstr, b.bgyname, c.ctyname, pv.provname, r.regname, a.patzip) AS patient_address,
          (
            SELECT ht.pattel
            FROM htelep ht
