@@ -25,6 +25,13 @@ const {
   getChartTrackingSummary,
 } = require("../controllers/chartTrackingController");
 
+// User endpoints
+const {
+  getUsers,
+  getUserById,
+  searchUserByEmployeeId,
+} = require("../controllers/userController");
+
 const router = express.Router();
 
 // Health & Status routes
@@ -51,5 +58,10 @@ router.get("/forms/baby", getBabyForm);
 // Chart Tracking routes
 router.get("/chart-tracking", getChartTracking);
 router.get("/chart-tracking/summary", getChartTrackingSummary);
+
+// User routes
+router.get("/users", getUsers);
+router.get("/users/by-employee/:employeeId", searchUserByEmployeeId);
+router.get("/users/:userId", getUserById);
 
 module.exports = router;
