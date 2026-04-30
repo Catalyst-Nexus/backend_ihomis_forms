@@ -51,7 +51,7 @@ async function getBabyForm(req, res, next) {
          hp.patlast AS mother_last_name,
          hp.patsuffix AS mother_suffix,
          hp.patsex AS mother_sex_code,
-         COALESCE(NULLIF(hadm.pho_hospital_number, ''), hen.fhud) AS hospital_number,
+         COALESCE(NULLIF(hadm.pho_hospital_number, ''), hen.hpercode) AS hospital_number,
          hd.del_presentation AS delivery_type,
          hd.obindex AS ob_index,
          hd.deliverydte AS delivery_date,

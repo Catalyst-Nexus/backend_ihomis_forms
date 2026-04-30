@@ -257,7 +257,7 @@ function mapBabyFormRow(row) {
     source_tables: {
       baby: "hnewborn",
       mother: "henctr + hperson",
-      hospital_no: "COALESCE(hadmlog.pho_hospital_number, henctr.fhud)",
+      hospital_no: "COALESCE(hadmlog.pho_hospital_number, henctr.hpercode)",
       address: "haddr + hbrgy + hcity + hprov + hregion",
       delivery: "hdelivery",
       obstetrician: "hpostpartum + hprovider + hpersonal",
