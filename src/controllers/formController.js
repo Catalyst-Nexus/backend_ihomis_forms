@@ -182,6 +182,144 @@ async function getBabyForm(req, res, next) {
   }
 }
 
+/**
+ * POST /api/db/forms/baby
+ * Create a new baby form/newborn record
+ * Body: {
+ *   enccode: string (required) - Encounter code
+ *   baby_first_name: string (required)
+ *   baby_middle_name: string (optional)
+ *   baby_last_name: string (required)
+ *   baby_sex: string (required) - M or F
+ *   baby_birth_date: string (required) - YYYY-MM-DD format
+ * }
+ */
+async function createBabyForm(req, res, next) {
+  try {
+    const {
+      enccode,
+      baby_first_name,
+      baby_middle_name,
+      baby_last_name,
+      baby_sex,
+      baby_birth_date,
+    } = req.body;
+
+    // Validation
+    if (!enccode || !baby_first_name || !baby_last_name || !baby_sex || !baby_birth_date) {
+      return res.status(400).json({
+        ok: false,
+        message: "Missing required fields: enccode, baby_first_name, baby_last_name, baby_sex, baby_birth_date",
+      });
+    }
+
+    // Validate sex code
+    if (!["M", "F"].includes(baby_sex.toUpperCase())) {
+      return res.status(400).json({
+        ok: false,
+        message: "baby_sex must be 'M' or 'F'",
+      });
+    }
+
+    // Validate date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(baby_birth_date)) {
+      return res.status(400).json({
+        ok: false,
+        message: "baby_birth_date must be in YYYY-MM-DD format",
+      });
+    }
+
+    // Check if encounter exists
+    const [encounterCheck] = await pool.query(
+      "SELECT enccode FROM henctr WHERE enccode = ?",
+      [enccode]
+    );
+
+    if (!encounterCheck.length) {
+      return res.status(404).json({
+        ok: false,
+        message: "Encounter not found",
+      });
+    }
+
+    // Get mother's hpercode from encounter
+    const [motherData] = await pool.query(
+      "SELECT hpercode FROM henctr WHERE enccode = ?",
+      [enccode]
+    );
+
+    if (!motherData.length) {
+      return res.status(400).json({
+        ok: false,
+        message: "Could not find mother information for this encounter",
+      });
+    }
+
+    const mother_hpercode = motherData[0].hpercode;
+
+    // Generate unique baby hpercode (you might want to use your hospital's ID generation)
+    const [maxId] = await pool.query(
+      "SELECT MAX(CAST(SUBSTRING(hpercode, -6) AS UNSIGNED)) as max_id FROM hperson"
+    );
+    const newId = (maxId[0]?.max_id || 0) + 1;
+    const baby_hpercode = String(newId).padStart(6, "0");
+
+    // Insert into hnewborn table
+    const [result] = await pool.query(
+      `INSERT INTO hnewborn (
+        enccode,
+        hpercode,
+        firstname,
+        middlename,
+        lastname,
+        sex,
+        birthdate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        enccode,
+        baby_hpercode,
+        baby_first_name.trim(),
+        baby_middle_name ? baby_middle_name.trim() : "",
+        baby_last_name.trim(),
+        baby_sex.toUpperCase(),
+        baby_birth_date,
+      ]
+    );
+
+    // Fetch the created baby form
+    const [babyForm] = await pool.query(
+      `SELECT
+         nb.enccode,
+         nb.hpercode AS baby_hpercode,
+         nb.firstname AS baby_first_name,
+         nb.middlename AS baby_middle_name,
+         nb.lastname AS baby_last_name,
+         nb.sex AS baby_sex_code,
+         nb.birthdate AS baby_birth_date
+       FROM hnewborn nb
+       WHERE nb.hpercode = ?`,
+      [baby_hpercode]
+    );
+
+    res.status(201).json({
+      ok: true,
+      message: "Baby form created successfully",
+      data: babyForm[0] || {
+        enccode,
+        baby_hpercode,
+        baby_first_name,
+        baby_middle_name: baby_middle_name || "",
+        baby_last_name,
+        baby_sex_code: baby_sex.toUpperCase(),
+        baby_birth_date,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getBabyForm,
+  createBabyForm,
 };

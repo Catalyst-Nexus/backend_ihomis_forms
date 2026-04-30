@@ -17,7 +17,7 @@ const {
 } = require("../controllers/encounterController");
 
 // Form endpoints
-const { getBabyForm } = require("../controllers/formController");
+const { getBabyForm, createBabyForm } = require("../controllers/formController");
 
 // Chart Tracking endpoints
 const {
@@ -54,6 +54,7 @@ router.get(
 
 // Form routes
 router.get("/forms/baby", getBabyForm);
+router.post("/forms/baby", createBabyForm);
 
 // Chart Tracking routes
 router.get("/chart-tracking", getChartTracking);
