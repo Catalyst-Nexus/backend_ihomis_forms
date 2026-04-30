@@ -1,6 +1,17 @@
 const pool = require("../config/db");
 const { mapSex } = require("../utils/dbHelpers");
 
+/**
+ * SQL CASE statement to detect encounter type based on:
+ * 1. Primary: henctr.toecode (encounter type of encounter code)
+ * 2. Fallback: hadmlog.typadm (admission type)
+ * 3. Fallback: Presence of admission dates
+ * 
+ * Supported codes:
+ * - ER/Emergency: E, ER, ERADM, ERD
+ * - OPD/Outpatient: O, OP, OPD
+ * - ADM/Inpatient: A, ADM, IPD, INP
+ */
 const ENCOUNTER_TYPE_SQL = `
   CASE
     -- Check for ER patterns first (including ERADM, ERD, E, etc.)
@@ -10,17 +21,44 @@ const ENCOUNTER_TYPE_SQL = `
     -- Fallback: check if there's admission data
     WHEN COALESCE(hadm.typadm, '') <> '' THEN 'ADM'
     WHEN COALESCE(hadm.admdate, '') <> '' OR COALESCE(hadm.disdate, '') <> '' THEN 'ADM'
-    -- Fallback: check if there's ER data even without proper toecode
-
+    -- Default case for unknown types
     ELSE 'UNKNOWN'
   END
 `;
 
 /**
  * GET /api/db/chart-tracking
- * Get chart tracking data for CHART Management System
- * Query params: type (ER|OPD|ADM), hpercode, enccode, limit, offset, search,
- * dischargedDate, admissionDateFrom, admissionDateTo
+ * 
+ * Fetch chart tracking data for CHART Management System
+ * Supports filtering by encounter type (ER, OPD, ADM) and various criteria
+ * 
+ * Query Parameters:
+ * - type: 'ER' | 'OPD' | 'ADM' - Filter by encounter type (optional)
+ * - hpercode: Patient code (optional)
+ * - enccode: Encounter code (optional)
+ * - search: Search patient name/code (optional)
+ * - dischargedDate: YYYY-MM-DD - Filter by exact discharge date (optional)
+ * - admissionDateFrom: YYYY-MM-DD - Range filter start (optional)
+ * - admissionDateTo: YYYY-MM-DD - Range filter end (optional)
+ * - limit: Number of records (default 50, max 1000)
+ * - offset: Pagination offset (default 0)
+ * 
+ * Response Fields:
+ * - enccode: Encounter code (primary key)
+ * - patient_id: Patient person code
+ * - patient_name: Formatted full name
+ * - patient_sex: Gender (mapped)
+ * - hospital_no: Hospital admission number
+ * - encounter_type: ER, OPD, or ADM
+ * - discharged_date: Date/time of discharge (type-specific)
+ * - phic: PhilHealth insurance status
+ * - records_received: Date/time and remarks of record receipt
+ * - verify_status: Verification status (Verified/Not yet Verified)
+ * - scan_status: Scanning status (Scanned/Not yet Scanned)
+ * - send_status: Sending status
+ * - records_filed: Filing status (Filed/Not yet Filed)
+ * - claim_map: PHIC claim mapping status
+ * - acpn: Account payable check number or claim reference
  */
 async function getChartTracking(req, res, next) {
   try {
@@ -102,50 +140,95 @@ async function getChartTracking(req, res, next) {
     const whereClause =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    // Main query: Fetch chart tracking data with all required fields
+    // =====================================================
+    // MAIN QUERY - Chart Tracking Data Fetch
+    // =====================================================
+    // This query fetches all required data for chart tracking from multiple tables:
+    // 
+    // Data Sources by Field:
+    // 1. Hospital No. → hadmlog.pho_hospital_number (or fallback to henctr.hpercode)
+    // 2. Patient Data → hperson (patlast, patfirst, patmiddle, patsuffix, patsex)
+    // 3. Admission Data → hadmlog (admdate, disdate, distime, typadm)
+    // 4. ER Data → herlog (erdtedis, ertmedis, erstat, ernotes)
+    // 5. OPD Data → hopdlog (opddtedis, opdtmedis, opdstat, opdrem)
+    // 6. Chart Tracking → hactrack (reqrecdte, reqrectme, chartdate, charttime, ccsmark, hremarks, billdate)
+    // 7. PHIC Claims → hphiclaim (phicstat)
+    // 8. Claim Mapping → hphicclaimmap (pClaimNumber, pStatus)
+    // 9. Patient Accounts → hpatacct (paacctno)
+    //
+    // Encounter Type Detection: Uses ENCOUNTER_TYPE_SQL case statement
+    // Discharge Date: Type-specific (ADM→disdate, ER→erdtedis, OPD→opddtedis)
+    // Records Received: Priority order from hactrack → encounter logs → admission date
+    // =====================================================
+    
     const [rows] = await pool.query(
       `SELECT
+         -- Encounter & Patient Identifiers
          hen.enccode,
          hen.hpercode,
         COALESCE(hadm.pho_hospital_number, hen.hpercode) AS hospital_no,
          hp.hpercode AS patient_id,
+         
+         -- Patient Demographics (from hperson)
          hp.patlast AS patient_last_name,
          hp.patfirst AS patient_first_name,
          hp.patmiddle AS patient_middle_name,
          hp.patsuffix AS patient_suffix,
          hp.patsex AS patient_sex,
+         
+         -- Admission Information
          hadm.admdate AS admission_date,
+         
+         -- Discharge Date (Type-specific: ADM→hadmlog, ER→herlog, OPD→hopdlog)
          MAX(CASE
            WHEN ${ENCOUNTER_TYPE_SQL} = 'ADM' THEN hadm.disdate
            WHEN ${ENCOUNTER_TYPE_SQL} = 'ER' THEN er.erdtedis
            WHEN ${ENCOUNTER_TYPE_SQL} = 'OPD' THEN opl.opddtedis
            ELSE COALESCE(hadm.disdate, er.erdtedis, opl.opddtedis)
          END) AS discharged_date,
+         
+         -- Discharge Time (Type-specific)
          MAX(CASE
            WHEN ${ENCOUNTER_TYPE_SQL} = 'ADM' THEN hadm.distime
            WHEN ${ENCOUNTER_TYPE_SQL} = 'ER' THEN er.ertmedis
            WHEN ${ENCOUNTER_TYPE_SQL} = 'OPD' THEN opl.opdtmedis
            ELSE COALESCE(hadm.distime, er.ertmedis, opl.opdtmedis)
          END) AS discharged_time,
+         
+         -- Encounter Type Detection
          ${ENCOUNTER_TYPE_SQL} AS encounter_type,
          hen.encdate AS encounter_date,
          COALESCE(hadm.disdate, hadm.admdate, hen.encdate) AS sort_date,
          hen.encstat AS current_status,
+         
+         -- PHIC Status (from hphiclaim)
          MAX(COALESCE(ph.phicstat, '')) AS phic_status,
+         
+         -- Claim Information (from hphicclaimmap)
          MAX(COALESCE(pcm.pClaimNumber, '')) AS claim_number,
          MAX(COALESCE(pcm.pStatus, '')) AS claim_map_status,
+         
+         -- Patient Account (from hpatacct - for ACPN)
          MAX(COALESCE(pa.paacctno, '')) AS acpn,
-         -- Prefer hactrack (reqrecdte/reqrectme) then chartdate/charttime, then ER/OPD/HADM (disdate for ADM)
+         
+         -- Records Received (Priority: hactrack → encounter logs → admission date)
          COALESCE(act.reqrecdte, act.chartdate, er.erdate, opl.opddate, hadm.disdate, hadm.admdate) AS records_received_date,
          COALESCE(act.reqrectme, act.charttime, er.ertime, opl.opdtime, hadm.distime, hadm.admtime) AS records_received_time,
          COALESCE(act.hremarks, er.ernotes, opl.opdrem, '') AS records_received_remarks,
+         
+         -- Verification Status (from ER/OPD/ADM encounter logs)
          MAX(COALESCE(er.erstat, opl.opdstat, '')) AS verify_mark,
+         
+         -- Scan Status (from hactrack - ccsmark or scan timestamp)
          MAX(COALESCE(act.ccsmark, '')) AS scan_mark,
          act.chartdate AS scan_date,
          act.charttime AS scan_time,
+         
+         -- Send & File Status (from hactrack and admission data)
          COALESCE(act.billdate, er.erdate, opl.opddate, hadm.admdate) AS send_date,
          hadm.disdate AS bill_date,
          hadm.distime AS bill_time
+         
          FROM henctr hen
          INNER JOIN hperson hp ON hp.hpercode = hen.hpercode
          LEFT JOIN hadmlog hadm ON hadm.enccode = hen.enccode
@@ -192,8 +275,8 @@ async function getChartTracking(req, res, next) {
         records_received: receivedDetails.display,
         verify_status: mapVerifyStatus(row.verify_mark),
         scan_status: mapScanStatus(row),
-        send_status: mapSendStatus(),
-        records_filed: mapRecordFiled(row),
+        send_status: mapSendStatus(row.send_date),
+        records_filed: mapRecordFiled(row.scan_date, row.scan_time),
         claim_map: mapClaimMapStatus(row.claim_map_status),
         acpn: mapAcpn(row.acpn, row.claim_number, row.claim_map_status),
       };
@@ -375,19 +458,23 @@ function mapScanStatus(row) {
   return "Not yet Scanned";
 }
 
-function mapSendStatus() {
-  // Match legacy chart-tracking behavior: sending is explicitly marked,
-  // not inferred from timestamps.
-  return "Not yet Sent";
+function mapSendStatus(sendDate) {
+  if (!sendDate) return "Not yet Sent";
+  
+  // Format the send date
+  const formatted = formatDateTime(sendDate);
+  return formatted ? `Sent (${formatted})` : "Not yet Sent";
 }
 
-function mapRecordFiled(row) {
-  const value = String(row.bill_status || row.hp_billed || "").trim().toUpperCase();
-  if (!value) return "Not yet Filed";
-  if (["Y", "1", "YES", "FILED", "DONE"].includes(value)) {
-    return "Filed";
+function mapRecordFiled(scanDate, scanTime) {
+  // Check if chart was filed by looking at hactrack timestamps
+  if (!scanDate && !scanTime) {
+    return "Not yet Filed";
   }
-  return "Not yet Filed";
+  
+  // If has chart date/time, it means the chart was filed
+  const formatted = formatDateTime(scanDate, scanTime);
+  return formatted ? `Filed (${formatted})` : "Filed";
 }
 
 function mapClaimMapStatus(rawStatus) {
@@ -400,13 +487,18 @@ function mapClaimMapStatus(rawStatus) {
 }
 
 function mapAcpn(acpn, claimNumber, claimMapStatus) {
-  const claimStatus = mapClaimMapStatus(claimMapStatus).toUpperCase();
-
-  if (claimStatus === "NOT YET SUBMITTED TO PHILHEALTH") {
-    return "No cheque yet";
+  // Always return ACPN if it exists in the database
+  if (acpn && String(acpn).trim()) {
+    return String(acpn).trim();
   }
 
-  return acpn || claimNumber || "No cheque yet";
+  // Fallback to claim number if no ACPN
+  if (claimNumber && String(claimNumber).trim()) {
+    return String(claimNumber).trim();
+  }
+
+  // Default if neither exists
+  return "No cheque yet";
 }
 
 module.exports = {
