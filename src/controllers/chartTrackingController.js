@@ -1,5 +1,5 @@
 const pool = require("../config/db");
-const { mapSex, formatDate } = require("../utils/dbHelpers");
+const { mapSex } = require("../utils/dbHelpers");
 
 const ENCOUNTER_TYPE_SQL = `
   CASE
@@ -115,8 +115,18 @@ async function getChartTracking(req, res, next) {
          hp.patsuffix AS patient_suffix,
          hp.patsex AS patient_sex,
          hadm.admdate AS admission_date,
-         hadm.disdate AS discharged_date,
-         hadm.distime AS discharged_time,
+         MAX(CASE
+           WHEN ${ENCOUNTER_TYPE_SQL} = 'ADM' THEN hadm.disdate
+           WHEN ${ENCOUNTER_TYPE_SQL} = 'ER' THEN er.erdtedis
+           WHEN ${ENCOUNTER_TYPE_SQL} = 'OPD' THEN opl.opddtedis
+           ELSE COALESCE(hadm.disdate, er.erdtedis, opl.opddtedis)
+         END) AS discharged_date,
+         MAX(CASE
+           WHEN ${ENCOUNTER_TYPE_SQL} = 'ADM' THEN hadm.distime
+           WHEN ${ENCOUNTER_TYPE_SQL} = 'ER' THEN er.ertmedis
+           WHEN ${ENCOUNTER_TYPE_SQL} = 'OPD' THEN opl.opdtmedis
+           ELSE COALESCE(hadm.distime, er.ertmedis, opl.opdtmedis)
+         END) AS discharged_time,
          ${ENCOUNTER_TYPE_SQL} AS encounter_type,
          hen.encdate AS encounter_date,
          COALESCE(hadm.disdate, hadm.admdate, hen.encdate) AS sort_date,
@@ -130,8 +140,9 @@ async function getChartTracking(req, res, next) {
          COALESCE(act.reqrectme, act.charttime, er.ertime, opl.opdtime, hadm.distime, hadm.admtime) AS records_received_time,
          COALESCE(act.hremarks, er.ernotes, opl.opdrem, '') AS records_received_remarks,
          MAX(COALESCE(er.erstat, opl.opdstat, '')) AS verify_mark,
-         COALESCE(act.chartdate, er.erdate, opl.opddate, hadm.admdate) AS scan_date,
-         COALESCE(act.charttime, er.ertime, opl.opdtime, hadm.distime) AS scan_time,
+         MAX(COALESCE(act.ccsmark, '')) AS scan_mark,
+         act.chartdate AS scan_date,
+         act.charttime AS scan_time,
          COALESCE(act.billdate, er.erdate, opl.opddate, hadm.admdate) AS send_date,
          hadm.disdate AS bill_date,
          hadm.distime AS bill_time
@@ -176,14 +187,11 @@ async function getChartTracking(req, res, next) {
         patient_sex: mapSex(row.patient_sex),
         hospital_no: row.hospital_no || "",
         encounter_type: row.encounter_type || "",
-        encounter_date: formatDate(row.encounter_date),
-        admission_date: formatDateTime(row.admission_date),
         discharged_date: formatDateTime(row.discharged_date, row.discharged_time),
-        current_status: row.current_status || "",
         phic: mapPhicStatus(row.phic_status),
         records_received: receivedDetails.display,
         verify_status: mapVerifyStatus(row.verify_mark),
-        scan_status: mapScanStatus(),
+        scan_status: mapScanStatus(row),
         send_status: mapSendStatus(),
         records_filed: mapRecordFiled(row),
         claim_map: mapClaimMapStatus(row.claim_map_status),
@@ -353,9 +361,17 @@ function mapVerifyStatus(verifyMark) {
   return "Not yet Verified";
 }
 
-function mapScanStatus() {
-  // Match legacy chart-tracking behavior: scanning is explicitly marked,
-  // not inferred from timestamps.
+function mapScanStatus(row) {
+  const mark = String(row.scan_mark || "").trim().toUpperCase();
+  if (["Y", "1", "YES", "DONE", "SCANNED"].includes(mark)) {
+    return "Scanned";
+  }
+
+  const hasScanTimestamp = Boolean(row.scan_date || row.scan_time);
+  if (hasScanTimestamp) {
+    return "Scanned";
+  }
+
   return "Not yet Scanned";
 }
 
