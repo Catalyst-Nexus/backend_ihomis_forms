@@ -34,6 +34,8 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 - `GET /api/db/patients/history/:hpercode` - Fetch admission and encounter history for a patient
 - `GET /api/db/patients/:hpercode/encounters/:enccode/records` - Fetch encounter-level clinical records
 - `GET /api/db/forms/baby` - Fetch baby/child form header fields from iHOMIS maternal-newborn tables
+- `GET /api/db/chart-tracking` - Fetch CHART Tracking System data with ER/OPD/ADM filtering
+- `GET /api/db/chart-tracking/summary` - Get summary statistics by encounter type
 
 ### Query params for `/api/db/henctr`
 
@@ -119,6 +121,59 @@ Data source mapping used by this endpoint:
 - delivery info: `hdelivery`
 - obstetrician: `hpostpartum.attenddr` + `hprovider` + `hpersonal`
 - anesthesia/anesthesiologist: `hproclog` + `hprovider` + `hpersonal`
+
+### Query params for `/api/db/chart-tracking`
+
+- `type` (optional) - Filter by encounter type: `ER`, `OPD`, or `ADM`
+- `hpercode` (optional) - Filter by patient code
+- `enccode` (optional) - Filter by encounter code
+- `search` (optional) - Search by patient name, patient code, or encounter code
+- `limit` (optional, default `50`, max `1000`)
+- `offset` (optional, default `0`)
+
+This endpoint returns chart tracking data with fields including:
+
+- `enccode` - Encounter code
+- `patient_id` - Patient code (hpercode)
+- `patient_name` - Full name (Last, First, Middle)
+- `patient_sex` - Male/Female/Unknown
+- `hospital_no` - Facility code (fhud)
+- `hospital_name` - Facility name
+- `encounter_type` - ER, OPD, or ADM
+- `encounter_date` - Date of encounter
+- `admission_date` - Admission date (for ADM only)
+- `discharged_date` - Discharge date
+- `phic_status` - PHIC claim status
+- `phic_claim_no` - PHIC claim number
+- `documents_received` - Count of documents received
+- `primary_diagnosis` - Primary diagnosis
+- `procedures` - Procedures performed
+- `current_status` - Current encounter status
+- `records_received` - Yes/No
+- `verify_status` - Verification status
+- `scan_status` - Scanning status
+- `send_status` - Send status
+- `records_filed` - Filing status
+- `claim_map` - Mapped/Pending
+
+Data sources for chart tracking:
+
+- Encounter data: `henctr`
+- Patient data: `hperson`
+- Admission data: `hadmlog`
+- PHIC claims: `hphicclaim` + `hphicclaimdocument`
+- Hospital info: `fhud_hospital`
+- Diagnoses: `hencdiag` + `hdiag`
+- Procedures: `hproclog` + `hproc`
+
+### GET `/api/db/chart-tracking/summary`
+
+Returns summary statistics grouped by encounter type (ER, OPD, ADM):
+
+- `encounter_type` - Type of encounter
+- `total_encounters` - Total number of encounters
+- `phic_filed` - Number with PHIC claims filed
+- `discharged` - Number of discharged encounters
 
 ## Coolify Deployment
 

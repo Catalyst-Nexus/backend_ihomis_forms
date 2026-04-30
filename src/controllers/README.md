@@ -15,7 +15,8 @@ src/
 │   ├── healthController.js       (Health & status checks)
 │   ├── patientController.js      (Patient endpoints)
 │   ├── encounterController.js    (Encounter endpoints)
-│   └── formController.js         (Form endpoints)
+│   ├── formController.js         (Form endpoints)
+│   └── chartTrackingController.js (CHART Tracking System endpoints)
 ├── utils/
 │   └── dbHelpers.js              (Shared helper functions & utilities)
 └── routes/
@@ -52,6 +53,13 @@ Handles encounter and medical records:
 
 Manages medical form endpoints:
 - `getBabyForm()` - GET `/api/db/forms/baby` - Get newborn/baby form information
+
+### Chart Tracking Controller
+**File:** `src/controllers/chartTrackingController.js`
+
+Manages CHART Tracking System endpoints:
+- `getChartTracking()` - GET `/api/db/chart-tracking` - Get chart tracking data with ER/OPD/ADM filtering
+- `getChartTrackingSummary()` - GET `/api/db/chart-tracking/summary` - Get summary statistics by encounter type
 
 ## Utilities
 

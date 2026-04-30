@@ -19,6 +19,12 @@ const {
 // Form endpoints
 const { getBabyForm } = require("../controllers/formController");
 
+// Chart Tracking endpoints
+const {
+  getChartTracking,
+  getChartTrackingSummary,
+} = require("../controllers/chartTrackingController");
+
 const router = express.Router();
 
 // Health & Status routes
@@ -41,5 +47,9 @@ router.get(
 
 // Form routes
 router.get("/forms/baby", getBabyForm);
+
+// Chart Tracking routes
+router.get("/chart-tracking", getChartTracking);
+router.get("/chart-tracking/summary", getChartTrackingSummary);
 
 module.exports = router;

@@ -13,6 +13,7 @@ const healthController = require("./healthController");
 const patientController = require("./patientController");
 const encounterController = require("./encounterController");
 const formController = require("./formController");
+const chartTrackingController = require("./chartTrackingController");
 
 module.exports = {
   // Health & Status
@@ -26,4 +27,7 @@ module.exports = {
 
   // Forms
   ...formController,
+
+  // Chart Tracking
+  ...chartTrackingController,
 };
