@@ -4,8 +4,15 @@ const { mapBabyFormRow } = require("../utils/dbHelpers");
 /**
  * GET /api/db/forms/baby
  * Get newborn/baby form information
- * Query params: enccode, babyHpercode, baby_hpercode, hpercode
- * Requires either enccode or babyHpercode
+ * Supports filtering by encounter code or baby person code
+ * 
+ * Query params (all optional):
+ * - enccode: Encounter code (optional)
+ * - babyHpercode: Baby person code (optional)
+ * - baby_hpercode: Alternative baby person code parameter (optional)
+ * - hpercode: Alternative person code parameter (optional)
+ * - limit: Number of records (default 50, max 1000)
+ * - offset: Pagination offset (default 0)
  */
 async function getBabyForm(req, res, next) {
   try {
@@ -13,13 +20,8 @@ async function getBabyForm(req, res, next) {
     const babyHpercode = String(
       req.query.babyHpercode || req.query.baby_hpercode || req.query.hpercode || "",
     ).trim();
-
-    if (!enccode && !babyHpercode) {
-      return res.status(400).json({
-        ok: false,
-        message: "Either enccode or babyHpercode is required",
-      });
-    }
+    const limit = Math.min(parseInt(req.query.limit) || 50, 1000);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
     const conditions = [];
     const params = [];
@@ -34,7 +36,7 @@ async function getBabyForm(req, res, next) {
       params.push(babyHpercode);
     }
 
-    const whereClause = `WHERE ${conditions.join(" AND ")}`;
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const [rows] = await pool.query(
       `SELECT
@@ -158,16 +160,9 @@ async function getBabyForm(req, res, next) {
        LEFT JOIN hdelivery hd ON hd.enccode = nb.enccode
        ${whereClause}
        ORDER BY nb.birthdate DESC
-       LIMIT 1`,
-      params,
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
     );
-
-    if (!rows.length) {
-      return res.status(404).json({
-        ok: false,
-        message: "No baby form data found for the provided filter",
-      });
-    }
 
     res.json({
       ok: true,
@@ -175,7 +170,12 @@ async function getBabyForm(req, res, next) {
         enccode: enccode || null,
         babyHpercode: babyHpercode || null,
       },
-      data: mapBabyFormRow(rows[0]),
+      pagination: {
+        limit,
+        offset,
+        count: rows.length,
+      },
+      data: rows.map(row => mapBabyFormRow(row)),
     });
   } catch (error) {
     next(error);
