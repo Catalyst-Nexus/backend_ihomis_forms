@@ -53,7 +53,6 @@ Handles encounter and medical records:
 
 Manages medical form endpoints:
 - `listBabyFormRecords()` - GET `/api/db/forms/baby` - Get newborn/baby form information
-- `createBabyFormRecord()` - POST `/api/db/forms/baby` - Create a newborn/baby form record
 
 ### Chart Tracking Controller
 **File:** `src/controllers/chartTrackingController.js`
