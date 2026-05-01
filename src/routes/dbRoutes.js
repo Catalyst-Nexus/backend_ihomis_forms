@@ -19,7 +19,6 @@ const {
 // Form endpoints
 const {
   listBabyFormRecords,
-  createBabyFormRecord,
 } = require("../controllers/formController");
 
 // Chart Tracking endpoints
@@ -57,7 +56,6 @@ router.get(
 
 // Form routes
 router.get("/forms/baby", listBabyFormRecords);
-router.post("/forms/baby", createBabyFormRecord);
 
 // Chart Tracking routes
 router.get("/chart-tracking", listChartTrackingRecords);

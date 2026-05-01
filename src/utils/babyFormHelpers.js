@@ -126,8 +126,6 @@ function normalizeBabyFormQuery(query = {}) {
     babyHpercode: String(
       query.babyHpercode || query.baby_hpercode || query.hpercode || "",
     ).trim(),
-    limit: Math.min(parseInt(query.limit, 10) || 50, 1000),
-    offset: Math.max(parseInt(query.offset, 10) || 0, 0),
   };
 }
 
@@ -152,75 +150,8 @@ function buildBabyFormWhereClause(filters = {}) {
   };
 }
 
-function normalizeBabyFormCreatePayload(body = {}) {
-  return {
-    enccode: String(body.enccode || "").trim(),
-    baby_first_name: String(body.baby_first_name || "").trim(),
-    baby_middle_name: String(body.baby_middle_name || "").trim(),
-    baby_last_name: String(body.baby_last_name || "").trim(),
-    baby_sex: String(body.baby_sex || "").trim().toUpperCase(),
-    baby_birth_date: String(body.baby_birth_date || "").trim(),
-  };
-}
-
-function validateBabyFormCreatePayload(payload) {
-  if (
-    !payload.enccode ||
-    !payload.baby_first_name ||
-    !payload.baby_last_name ||
-    !payload.baby_sex ||
-    !payload.baby_birth_date
-  ) {
-    return "Missing required fields: enccode, baby_first_name, baby_last_name, baby_sex, baby_birth_date";
-  }
-
-  if (!["M", "F"].includes(payload.baby_sex)) {
-    return "baby_sex must be 'M' or 'F'";
-  }
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.baby_birth_date)) {
-    return "baby_birth_date must be in YYYY-MM-DD format";
-  }
-
-  return null;
-}
-
-async function fetchEncounterMotherHpercode(pool, enccode) {
-  const [rows] = await pool.query(
-    "SELECT hpercode FROM henctr WHERE enccode = ? LIMIT 1",
-    [enccode],
-  );
-
-  return rows[0] || null;
-}
-
-async function generateNextBabyHpercode(pool) {
-  const [rows] = await pool.query(
-    "SELECT MAX(CAST(SUBSTRING(hpercode, -6) AS UNSIGNED)) AS max_id FROM hperson",
-  );
-  const nextId = (rows[0]?.max_id || 0) + 1;
-
-  return String(nextId).padStart(6, "0");
-}
-
-async function fetchBabyFormByHpercode(pool, babyHpercode) {
-  const [rows] = await pool.query(
-    `${BABY_FORM_SELECT_SQL}
-     WHERE nb.hpercode = ?
-     LIMIT 1`,
-    [babyHpercode],
-  );
-
-  return rows[0] || null;
-}
-
 module.exports = {
   BABY_FORM_SELECT_SQL,
   normalizeBabyFormQuery,
   buildBabyFormWhereClause,
-  normalizeBabyFormCreatePayload,
-  validateBabyFormCreatePayload,
-  fetchEncounterMotherHpercode,
-  generateNextBabyHpercode,
-  fetchBabyFormByHpercode,
 };
