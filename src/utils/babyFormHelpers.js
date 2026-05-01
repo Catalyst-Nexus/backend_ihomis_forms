@@ -126,8 +126,6 @@ function normalizeBabyFormQuery(query = {}) {
     babyHpercode: String(
       query.babyHpercode || query.baby_hpercode || query.hpercode || "",
     ).trim(),
-    limit: Math.min(parseInt(query.limit, 10) || 50, 1000),
-    offset: Math.max(parseInt(query.offset, 10) || 0, 0),
   };
 }
 

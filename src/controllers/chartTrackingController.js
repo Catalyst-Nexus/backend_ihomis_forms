@@ -76,31 +76,14 @@ async function listChartTrackingRecords(req, res, next) {
                 hp.patmiddle, hp.patsuffix, hp.patsex, hadm.admdate, hadm.disdate,
                 hadm.distime, hadm.pho_hospital_number, hen.toecode, hadm.typadm,
                 hen.encdate, hen.encstat
-       ORDER BY sort_date DESC, hen.encdate DESC
-       LIMIT ? OFFSET ?`,
-      [...params, filters.limit, filters.offset],
-    );
-
-    const [countResult] = await pool.query(
-      `SELECT COUNT(*) AS total
-       FROM henctr hen
-       INNER JOIN hperson hp ON hp.hpercode = hen.hpercode
-       LEFT JOIN hadmlog hadm ON hadm.enccode = hen.enccode
-       ${whereClause}`,
+       ORDER BY sort_date DESC, hen.encdate DESC`,
       params,
     );
-
-    const total = countResult[0]?.total || 0;
 
     return res.json({
       ok: true,
       data: formatChartTrackingRecords(rows),
-      pagination: {
-        limit: filters.limit,
-        offset: filters.offset,
-        total,
-        pages: Math.ceil(total / filters.limit),
-      },
+      count: rows.length,
       filters: {
         type: filters.type || "All",
         hpercode: filters.hpercode || null,

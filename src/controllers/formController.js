@@ -14,9 +14,8 @@ async function listBabyFormRecords(req, res, next) {
     const [rows] = await pool.query(
       `${BABY_FORM_SELECT_SQL}
        ${whereClause}
-       ORDER BY nb.birthdate DESC
-       LIMIT ? OFFSET ?`,
-      [...params, filters.limit, filters.offset],
+       ORDER BY nb.birthdate DESC`,
+      params,
     );
 
     return res.json({
@@ -25,11 +24,7 @@ async function listBabyFormRecords(req, res, next) {
         enccode: filters.enccode || null,
         babyHpercode: filters.babyHpercode || null,
       },
-      pagination: {
-        limit: filters.limit,
-        offset: filters.offset,
-        count: rows.length,
-      },
+      count: rows.length,
       data: rows.map((row) => mapBabyFormRow(row)),
     });
   } catch (error) {

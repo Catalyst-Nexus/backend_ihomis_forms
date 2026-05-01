@@ -22,8 +22,6 @@ function normalizeChartTrackingFilters(query = {}) {
     dischargedDate: String(query.dischargedDate || "").trim(),
     admissionDateFrom: String(query.admissionDateFrom || "").trim(),
     admissionDateTo: String(query.admissionDateTo || "").trim(),
-    limit: Math.min(parseInt(query.limit, 10) || 50, 1000),
-    offset: Math.max(parseInt(query.offset, 10) || 0, 0),
   };
 }
 
