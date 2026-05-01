@@ -171,6 +171,7 @@ function createEmptyRecordBucket() {
 // ==================== Row Mapping Functions ====================
 function mapPatientRow(row) {
   return {
+    ...row,
     id: row.hpercode || row.hospital_number || "",
     hpercode: row.hpercode || row.hospital_number || "",
     first_name: row.first_name || row.patfirst || "",
@@ -227,6 +228,12 @@ function mapPatientRow(row) {
     bmi: row.bmi || row.vsbmi || "",
     bmi_category: row.bmi_category || row.vsbmicat || "",
     ward_category: row.ward_category || row.tsdesc || "",
+    discharge_diagnosis: row.discharge_diagnosis || row.disnotes || "",
+    disposition: row.disposition || row.dispcode || "",
+    condition: row.condition || row.condcode || "",
+    type_of_admission: row.type_of_admission || row.newold || "",
+    fetal_heart_rate: row.fetal_heart_rate || row.fetalhr || "",
+    admitting_clerk: row.admitting_clerk || "",
   };
 }
 
