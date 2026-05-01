@@ -52,13 +52,14 @@ Handles encounter and medical records:
 **File:** `src/controllers/formController.js`
 
 Manages medical form endpoints:
-- `getBabyForm()` - GET `/api/db/forms/baby` - Get newborn/baby form information
+- `listBabyFormRecords()` - GET `/api/db/forms/baby` - Get newborn/baby form information
+- `createBabyFormRecord()` - POST `/api/db/forms/baby` - Create a newborn/baby form record
 
 ### Chart Tracking Controller
 **File:** `src/controllers/chartTrackingController.js`
 
 Manages CHART Tracking System endpoints:
-- `getChartTracking()` - GET `/api/db/chart-tracking` - Get chart tracking data with ER/OPD/ADM filtering
+- `listChartTrackingRecords()` - GET `/api/db/chart-tracking` - Get chart tracking data with ER/OPD/ADM filtering
 - `getChartTrackingSummary()` - GET `/api/db/chart-tracking/summary` - Get summary statistics by encounter type
 
 ## Utilities
@@ -110,7 +111,7 @@ const { getPatientList, searchPatients } = require("../controllers/patientContro
 const { getHenctrInfo } = require("../controllers/encounterController");
 
 // Import forms controller
-const { getBabyForm } = require("../controllers/formController");
+const { listBabyFormRecords } = require("../controllers/formController");
 ```
 
 ### Using Helpers

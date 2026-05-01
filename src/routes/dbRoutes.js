@@ -17,11 +17,14 @@ const {
 } = require("../controllers/encounterController");
 
 // Form endpoints
-const { getBabyForm, createBabyForm } = require("../controllers/formController");
+const {
+  listBabyFormRecords,
+  createBabyFormRecord,
+} = require("../controllers/formController");
 
 // Chart Tracking endpoints
 const {
-  getChartTracking,
+  listChartTrackingRecords,
   getChartTrackingSummary,
 } = require("../controllers/chartTrackingController");
 
@@ -53,11 +56,11 @@ router.get(
 );
 
 // Form routes
-router.get("/forms/baby", getBabyForm);
-router.post("/forms/baby", createBabyForm);
+router.get("/forms/baby", listBabyFormRecords);
+router.post("/forms/baby", createBabyFormRecord);
 
 // Chart Tracking routes
-router.get("/chart-tracking", getChartTracking);
+router.get("/chart-tracking", listChartTrackingRecords);
 router.get("/chart-tracking/summary", getChartTrackingSummary);
 
 // User routes
