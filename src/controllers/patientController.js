@@ -159,7 +159,7 @@ async function getPatientList(req, res, next) {
           LIMIT 1
         ) AS admitting_clerk,
         (
-          SELECT CONCAT_WS(' ', hd.diagcode, hd.diagtext)
+          SELECT hd.diagcode
           FROM hencdiag hd
           INNER JOIN henctr he ON he.enccode = hd.enccode
           WHERE he.hpercode = p.hpercode
@@ -331,7 +331,7 @@ async function getPatientHistory(req, res, next) {
           LIMIT 1
         ) AS admitting_clerk
         ,(
-          SELECT CONCAT_WS(' ', hd.diagcode, hd.diagtext)
+          SELECT hd.diagcode
           FROM hencdiag hd
           WHERE hd.enccode = a.enccode
           LIMIT 1
@@ -578,7 +578,7 @@ async function searchPatients(req, res, next) {
            LIMIT 1
          ) AS admitting_clerk,
          (
-           SELECT CONCAT_WS(' ', hd.diagcode, hd.diagtext)
+           SELECT hd.diagcode
            FROM hencdiag hd
            INNER JOIN henctr he ON he.enccode = hd.enccode
            WHERE he.hpercode = hperson.hpercode
