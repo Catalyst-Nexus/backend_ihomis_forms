@@ -52,9 +52,18 @@ async function getHenctrInfo(req, res, next) {
          henctr.fhud,
          hdocord.docointkey,
          hdocord.entryby AS user,
-         hdocord.dodate AS requestedDate,
-         hdocord.dotime AS requestedTime,
-         CONCAT_WS(' ', hdocord.dodate, hdocord.dotime) AS requestedAt,
+         DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS requestedDate,
+         DATE_FORMAT(hdocord.dotime, '%H:%i:%s') AS requestedTime,
+         CASE
+           WHEN hdocord.dodate IS NULL AND hdocord.dotime IS NULL THEN NULL
+           WHEN hdocord.dodate IS NULL THEN DATE_FORMAT(hdocord.dotime, '%Y-%m-%d %H:%i:%s')
+           WHEN hdocord.dotime IS NULL THEN DATE_FORMAT(hdocord.dodate, '%Y-%m-%d %H:%i:%s')
+           ELSE CONCAT(
+             DATE_FORMAT(hdocord.dodate, '%Y-%m-%d'),
+             ' ',
+             DATE_FORMAT(hdocord.dotime, '%H:%i:%s')
+           )
+         END AS requestedAt,
          hperson.patfirst AS firstName,
          hperson.patmiddle AS middleName,
          hperson.patlast AS lastName
