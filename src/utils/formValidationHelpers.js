@@ -39,7 +39,7 @@ function buildValidationWhereClause(filters = {}) {
   }
 
   if (filters.enccode) {
-    conditions.push("hdocord.enccode = ?");
+    conditions.push("henctr.enccode = ?");
     params.push(filters.enccode);
   }
 

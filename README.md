@@ -125,7 +125,7 @@ Data source mapping used by this endpoint:
 
 ### Query params for `/api/db/forms/validation`
 
-- `hpercode` (required) - Patient code to validate against
+- `hpercode` (optional) - Filter validation by patient code
 - `enccode` (optional) - Restrict validation to a specific encounter
 - `user` (optional) - Restrict validation to a specific form owner/encoder
 - `forms` (optional) - Comma-separated list of `docointkey` values to validate
