@@ -86,7 +86,7 @@ async function getPatientList(req, res, next) {
         (SELECT h.admdate FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS admission_date,
         (SELECT h.disdate FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS discharge_date,
         (SELECT h.admtxt FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS chief_complaint,
-        (SELECT h.admnotes FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS admission_notes,
+        (SELECT h.admnotes FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS admission_diagnosis,
         (
           SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
           FROM hadmlog h
@@ -145,7 +145,26 @@ async function getPatientList(req, res, next) {
           LEFT JOIN htypser ts ON wd.tscode = ts.tscode
           WHERE pr.hpercode = p.hpercode
           LIMIT 1
-        ) AS ward_category
+        ) AS ward_category,
+        (SELECT h.disnotes FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS discharge_diagnosis,
+        (SELECT h.dispcode FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS disposition,
+        (SELECT h.condcode FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS 'condition',
+        (SELECT h.newold FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS type_of_admission,
+        (SELECT vs.fetal_heart_rate FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS fetal_heart_rate,
+        (
+          SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
+          FROM hadmlog h
+          LEFT JOIN hpersonal hp ON h.admclerk = hp.employeeid
+          WHERE h.hpercode = p.hpercode
+          LIMIT 1
+        ) AS admitting_clerk,
+        (
+          SELECT hd.diagcode
+          FROM hencdiag hd
+          INNER JOIN henctr he ON he.enccode = hd.enccode
+          WHERE he.hpercode = p.hpercode
+          LIMIT 1
+        ) AS icd_code
       FROM hperson p
       LEFT JOIN haddr a ON p.hpercode = a.hpercode
       LEFT JOIN hbrgy b ON a.brg = b.bgycode
@@ -279,6 +298,10 @@ async function getPatientHistory(req, res, next) {
         a.deleted_at,
         a.created_at,
         a.discharge_by,
+        a.disnotes,
+        a.dispcode,
+        a.condcode,
+        a.newold,
         e.fhud AS encounter_fhud,
         e.hpercode AS encounter_hpercode,
         e.encdate AS encounter_date,
@@ -299,7 +322,20 @@ async function getPatientHistory(req, res, next) {
         e.casetype AS encounter_casetype,
         e.tacode AS encounter_tacode,
         e.consentphie AS encounter_consentphie,
-        e.cf4attendprov AS encounter_cf4attendprov
+        e.cf4attendprov AS encounter_cf4attendprov,
+        (SELECT vs.fetal_heart_rate FROM hvitalsign vs WHERE vs.hpercode = a.hpercode LIMIT 1) AS fetal_heart_rate,
+        (
+          SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
+          FROM hpersonal hp
+          WHERE hp.employeeid = a.admclerk
+          LIMIT 1
+        ) AS admitting_clerk
+        ,(
+          SELECT hd.diagcode
+          FROM hencdiag hd
+          WHERE hd.enccode = a.enccode
+          LIMIT 1
+        ) AS icd_code
       FROM hadmlog a
       LEFT JOIN henctr e ON a.enccode = e.enccode
       WHERE a.hpercode = ?
@@ -437,7 +473,6 @@ async function searchPatients(req, res, next) {
          hperson.patcstat,
          hperson.natcode,
          hperson.relcode,
-         hperson.pattelno,
          hperson.fatlast,
          hperson.fatmid,
          hperson.fatfirst,
@@ -470,7 +505,7 @@ async function searchPatients(req, res, next) {
          (SELECT h.admdate FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS admission_date,
          (SELECT h.disdate FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS discharge_date,
          (SELECT h.admtxt FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS chief_complaint,
-         (SELECT h.admnotes FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS admission_notes,
+         (SELECT h.admnotes FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS admission_diagnosis,
          (
            SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
            FROM hadmlog h
@@ -529,7 +564,26 @@ async function searchPatients(req, res, next) {
            LEFT JOIN htypser ts ON wd.tscode = ts.tscode
            WHERE pr.hpercode = hperson.hpercode
            LIMIT 1
-         ) AS ward_category
+         ) AS ward_category,
+         (SELECT h.disnotes FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS discharge_diagnosis,
+         (SELECT h.dispcode FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS disposition,
+         (SELECT h.condcode FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS 'condition',
+         (SELECT h.newold FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS type_of_admission,
+         (SELECT vs.fetal_heart_rate FROM hvitalsign vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS fetal_heart_rate,
+         (
+           SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
+           FROM hadmlog h
+           LEFT JOIN hpersonal hp ON h.admclerk = hp.employeeid
+           WHERE h.hpercode = hperson.hpercode
+           LIMIT 1
+         ) AS admitting_clerk,
+         (
+           SELECT hd.diagcode
+           FROM hencdiag hd
+           INNER JOIN henctr he ON he.enccode = hd.enccode
+           WHERE he.hpercode = hperson.hpercode
+           LIMIT 1
+         ) AS icd_code
        FROM hdocord
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
        LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
