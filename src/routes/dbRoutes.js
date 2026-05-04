@@ -19,6 +19,7 @@ const {
 // Form endpoints
 const {
   listBabyFormRecords,
+  validateFormRecords,
 } = require("../controllers/formController");
 
 // Chart Tracking endpoints
@@ -56,6 +57,7 @@ router.get(
 
 // Form routes
 router.get("/forms/baby", listBabyFormRecords);
+router.get("/forms/validation", validateFormRecords);
 
 // Chart Tracking routes
 router.get("/chart-tracking", listChartTrackingRecords);
