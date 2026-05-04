@@ -34,6 +34,7 @@ Express.js backend for iHOMIS Forms with MySQL connection via environment variab
 - `GET /api/db/patients/history/:hpercode` - Fetch admission and encounter history for a patient
 - `GET /api/db/patients/:hpercode/encounters/:enccode/records` - Fetch encounter-level clinical records
 - `GET /api/db/forms/baby` - Fetch baby/child form header fields from iHOMIS maternal-newborn tables
+- `GET /api/db/forms/validation` - Validate whether requested forms already exist for a patient/encounter
 - `GET /api/db/chart-tracking` - Fetch CHART Tracking System data with ER/OPD/ADM filtering
 - `GET /api/db/chart-tracking/summary` - Get summary statistics by encounter type
 
@@ -121,6 +122,22 @@ Data source mapping used by this endpoint:
 - delivery info: `hdelivery`
 - obstetrician: `hpostpartum.attenddr` + `hprovider` + `hpersonal`
 - anesthesia/anesthesiologist: `hproclog` + `hprovider` + `hpersonal`
+
+### Query params for `/api/db/forms/validation`
+
+- `hpercode` (optional) - Filter validation by patient code
+- `enccode` (optional) - Restrict validation to a specific encounter
+- `user` (optional) - Restrict validation to a specific form owner/encoder
+- `forms` (optional) - Comma-separated list of `docointkey` values to validate
+
+This endpoint returns:
+
+- `patient` - Patient context for the validation request
+- `requested_forms` - Forms to validate from the query string
+- `submitted_forms` - Forms found in `hdocord`
+- `data` - Validation results with `exists` per requested form
+- `missing_forms` - Requested forms not yet found in the database
+- `existing_forms` - Requested forms already found in the database
 
 ### Query params for `/api/db/chart-tracking`
 
