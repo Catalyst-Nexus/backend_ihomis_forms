@@ -42,7 +42,6 @@ async function listBabyFormRecords(req, res, next) {
 async function validateFormRecords(req, res, next) {
   try {
     const filters = normalizeValidationQuery(req.query);
-    const { whereClause, params } = buildValidationWhereClause(filters);
 
     const patientConditions = [];
     const patientParams = [];
@@ -62,7 +61,7 @@ async function validateFormRecords(req, res, next) {
       : "";
 
     const [patientRows] = await pool.query(
-      `SELECT
+      `SELECT DISTINCT
          henctr.hpercode,
          henctr.enccode,
          henctr.fhud,
@@ -76,19 +75,16 @@ async function validateFormRecords(req, res, next) {
        FROM henctr
        LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
        ${patientWhereClause}
-       ORDER BY henctr.enccode DESC
-       LIMIT 1`,
+       ORDER BY henctr.enccode DESC`,
       patientParams,
     );
-
-    const resolvedHpercode = patientRows[0]?.hpercode || filters.hpercode;
 
     const submissionConditions = ["hdocord.docointkey IS NOT NULL", "hdocord.docointkey <> ''"];
     const submissionParams = [];
 
-    if (resolvedHpercode) {
+    if (filters.hpercode) {
       submissionConditions.push("henctr.hpercode = ?");
-      submissionParams.push(resolvedHpercode);
+      submissionParams.push(filters.hpercode);
     }
 
     if (filters.enccode) {
@@ -107,56 +103,57 @@ async function validateFormRecords(req, res, next) {
 
     const [submissionRows] = await pool.query(
       `SELECT
-         hdocord.docointkey,
+         henctr.hpercode,
          henctr.enccode,
+         hdocord.docointkey,
          hdocord.entryby AS user,
          COUNT(*) AS total_submissions
        FROM hdocord
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
        ${submissionWhereClause}
-       GROUP BY hdocord.docointkey, henctr.enccode, hdocord.entryby
-       ORDER BY hdocord.docointkey ASC, henctr.enccode DESC`,
+       GROUP BY henctr.hpercode, henctr.enccode, hdocord.docointkey, hdocord.entryby
+       ORDER BY henctr.enccode DESC, hdocord.docointkey ASC`,
       submissionParams,
     );
 
-    const submissionIndex = indexSubmittedForms(submissionRows);
-    const validations = buildValidationResults(
-      filters.requestedForms,
-      submissionIndex,
-    );
+    const data = patientRows.map((patientRow) => {
+      const patientForms = submissionRows.filter(
+        (row) =>
+          row.hpercode === patientRow.hpercode &&
+          row.enccode === patientRow.enccode,
+      );
+
+      const submissionIndex = indexSubmittedForms(patientForms);
+      const validations = buildValidationResults(
+        filters.requestedForms,
+        submissionIndex,
+      );
+
+      return {
+        hpercode: patientRow.hpercode || "",
+        enccode: patientRow.enccode || "",
+        fhud: patientRow.fhud || "",
+        patient_name: patientRow.patient_name || "",
+        first_name: patientRow.patfirst || "",
+        middle_name: patientRow.patmiddle || "",
+        last_name: patientRow.patlast || "",
+        suffix: patientRow.patsuffix || "",
+        sex: patientRow.patsex || "",
+        birth_date: patientRow.patbdate || null,
+        forms_count: patientForms.length,
+        forms: validations,
+      };
+    });
 
     return res.json({
       ok: true,
-      scope: {
-        hpercode: resolvedHpercode || null,
+      filters: {
+        hpercode: filters.hpercode || null,
         enccode: filters.enccode || null,
         user: filters.user || null,
       },
-      patient: patientRows[0]
-        ? {
-            hpercode: patientRows[0].hpercode || filters.hpercode,
-            enccode: patientRows[0].enccode || filters.enccode || null,
-            fhud: patientRows[0].fhud || null,
-            patient_name: patientRows[0].patient_name || "",
-            first_name: patientRows[0].patfirst || "",
-            middle_name: patientRows[0].patmiddle || "",
-            last_name: patientRows[0].patlast || "",
-            suffix: patientRows[0].patsuffix || "",
-            sex: patientRows[0].patsex || "",
-            birth_date: patientRows[0].patbdate || null,
-          }
-        : null,
-      counts: {
-        requested_forms: filters.requestedForms.length,
-        submitted_forms: submissionRows.length,
-        matched_forms: validations.filter((item) => item.exists).length,
-        missing_forms: validations.filter((item) => !item.exists).length,
-      },
-      requested_forms: filters.requestedForms,
-      submitted_forms: serializeSubmissionIndex(submissionIndex),
-      data: validations,
-      missing_forms: validations.filter((item) => !item.exists),
-      existing_forms: validations.filter((item) => item.exists),
+      count: patientRows.length,
+      data,
     });
   } catch (error) {
     next(error);
