@@ -1,7 +1,11 @@
 const express = require("express");
 
 // Health & Status endpoints
-const { dbStatus, listTables, dbInfo } = require("../controllers/healthController");
+const {
+  dbStatus,
+  listTables,
+  dbInfo,
+} = require("../controllers/healthController");
 
 // Patient endpoints
 const {
@@ -13,13 +17,12 @@ const {
 // Encounter endpoints
 const {
   getHenctrInfo,
+  getLatestEncounterForPatient,
   getPatientEncounterRecords,
 } = require("../controllers/encounterController");
 
 // Form endpoints
-const {
-  listBabyFormRecords,
-} = require("../controllers/formController");
+const { listBabyFormRecords } = require("../controllers/formController");
 
 // Chart Tracking endpoints
 const {
@@ -43,6 +46,10 @@ router.get("/info", dbInfo);
 
 // Encounter routes
 router.get("/henctr", getHenctrInfo);
+router.get(
+  "/patients/:hpercode/encounters/latest",
+  getLatestEncounterForPatient,
+);
 
 // Patient routes
 router.get("/patients", searchPatients);

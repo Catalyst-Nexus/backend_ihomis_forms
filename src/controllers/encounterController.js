@@ -52,6 +52,9 @@ async function getHenctrInfo(req, res, next) {
          henctr.fhud,
          hdocord.docointkey,
          hdocord.entryby AS user,
+         hdocord.dodate AS requestedDate,
+         hdocord.dotime AS requestedTime,
+         CONCAT_WS(' ', hdocord.dodate, hdocord.dotime) AS requestedAt,
          hperson.patfirst AS firstName,
          hperson.patmiddle AS middleName,
          hperson.patlast AS lastName
@@ -80,6 +83,63 @@ async function getHenctrInfo(req, res, next) {
     });
   } catch (error) {
     next(error);
+  }
+}
+
+/**
+ * GET /api/db/patients/:hpercode/encounters/latest
+ * Fetch the most recent encounter code for a patient
+ */
+async function getLatestEncounterForPatient(req, res, next) {
+  try {
+    const hpercode = String(req.params.hpercode || "").trim();
+
+    if (!hpercode) {
+      return res.status(400).json({
+        ok: false,
+        message: "hpercode is required",
+      });
+    }
+
+    const [rows] = await pool.query(
+      `
+        SELECT
+          a.enccode,
+          a.hpercode,
+          a.admdate,
+          a.admtime,
+          a.disdate,
+          a.distime
+        FROM hadmlog a
+        WHERE a.hpercode = ?
+        ORDER BY a.admdate DESC, a.admtime DESC
+        LIMIT 1
+      `,
+      [hpercode],
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        ok: false,
+        message: "No encounter found for this patient.",
+      });
+    }
+
+    const row = rows[0];
+
+    return res.json({
+      ok: true,
+      hpercode,
+      data: {
+        enccode: row.enccode,
+        admdate: row.admdate,
+        admtime: row.admtime,
+        disdate: row.disdate,
+        distime: row.distime,
+      },
+    });
+  } catch (error) {
+    return next(error);
   }
 }
 
@@ -140,5 +200,6 @@ async function getPatientEncounterRecords(req, res, next) {
 
 module.exports = {
   getHenctrInfo,
+  getLatestEncounterForPatient,
   getPatientEncounterRecords,
 };
