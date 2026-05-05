@@ -457,16 +457,46 @@ async function searchPatients(req, res, next) {
       ${whereClause}
     `;
 
-    const countQuery = `SELECT COUNT(DISTINCT hdocord.enccode) AS total ${baseJoin}`;
+    const docOrderQuery = `
+      SELECT
+        hdocord.docointkey,
+        hdocord.enccode,
+        henctr.hpercode,
+        MAX(hdocord.entryby) AS entryby
+      ${baseJoin}
+      GROUP BY hdocord.docointkey, hdocord.enccode, henctr.hpercode
+    `;
+
+    const latestPerPatientQuery = `
+      SELECT
+        hpercode,
+        MAX(docointkey) AS docointkey
+      FROM (${docOrderQuery}) doc_orders
+      GROUP BY hpercode
+    `;
+
+    const latestEncounterQuery = `
+      SELECT
+        hpercode,
+        docointkey,
+        MAX(enccode) AS enccode
+      FROM (${docOrderQuery}) doc_orders
+      GROUP BY hpercode, docointkey
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) AS total
+      FROM (${latestPerPatientQuery}) patient_rows
+    `;
     const [[{ total }]] = await pool.query(countQuery, params);
 
     const [rows] = await pool.query(
       `SELECT
-         hdocord.enccode,
-         henctr.fhud,
-         hdocord.docointkey,
-         hdocord.entryby AS user,
-         hperson.hpercode,
+        doc_orders.enccode,
+        henctr.fhud,
+        doc_orders.docointkey,
+        doc_orders.entryby AS user,
+        hperson.hpercode,
          hperson.patlast,
          hperson.patfirst,
          hperson.patmiddle,
@@ -590,27 +620,35 @@ async function searchPatients(req, res, next) {
            WHERE he.hpercode = hperson.hpercode
            LIMIT 1
          ) AS icd_code
-       FROM (
+       FROM (${docOrderQuery}) doc_orders
+       INNER JOIN (${latestPerPatientQuery}) latest
+         ON latest.hpercode = doc_orders.hpercode
+         AND latest.docointkey = doc_orders.docointkey
+      INNER JOIN (${latestEncounterQuery}) latest_enc
+        ON latest_enc.hpercode = doc_orders.hpercode
+        AND latest_enc.docointkey = doc_orders.docointkey
+        AND latest_enc.enccode = doc_orders.enccode
+       INNER JOIN henctr ON henctr.enccode = doc_orders.enccode
+       LEFT JOIN hperson ON hperson.hpercode = doc_orders.hpercode
+       LEFT JOIN (
          SELECT
-           hdocord.enccode,
-           MAX(hdocord.docointkey) AS docointkey
-         ${baseJoin}
-         GROUP BY hdocord.enccode
-       ) latest
-       INNER JOIN hdocord
-         ON hdocord.enccode = latest.enccode
-         AND hdocord.docointkey = latest.docointkey
-       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
-       LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
-       LEFT JOIN haddr a ON hperson.hpercode = a.hpercode
+           hpercode,
+           MAX(brg) AS brg,
+           MAX(patstr) AS patstr,
+           MAX(ctycode) AS ctycode,
+           MAX(provcode) AS provcode,
+           MAX(patzip) AS patzip
+         FROM haddr
+         GROUP BY hpercode
+       ) a ON hperson.hpercode = a.hpercode
        LEFT JOIN hbrgy b ON a.brg = b.bgycode
        LEFT JOIN hcity c ON a.ctycode = c.ctycode
        LEFT JOIN hprov pv ON a.provcode = pv.provcode
        LEFT JOIN hregion r ON c.ctyreg = r.regcode
        LEFT JOIN fhud_hospital fh ON hperson.hfhudcode = fh.hfhudcode
-       ORDER BY hdocord.docointkey DESC, hdocord.enccode DESC
+       ORDER BY hperson.patlast, hperson.patfirst, hperson.hpercode
        LIMIT ? OFFSET ?`,
-      [...params, limit, offset],
+      [...params, ...params, ...params, limit, offset],
     );
 
     const data = rows.map((row) => ({
