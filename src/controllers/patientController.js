@@ -24,13 +24,13 @@ async function getPatientList(req, res, next) {
     if (name) {
       const searchTerm = `%${name}%`;
       conditions.push(
-        "(p.patlast LIKE ? OR p.patfirst LIKE ? OR p.patmiddle LIKE ? OR p.hpercode LIKE ?)",
+        "(p_inner.patlast LIKE ? OR p_inner.patfirst LIKE ? OR p_inner.patmiddle LIKE ? OR p_inner.hpercode LIKE ?)",
       );
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (facility) {
-      conditions.push("p.hfhudcode = ?");
+      conditions.push("p_inner.hfhudcode = ?");
       params.push(facility);
     }
 
@@ -122,7 +122,7 @@ async function getPatientList(req, res, next) {
           LIMIT 1
         ) AS ward_name,
         (
-          SELECT CONCAT_WS(' - ', 
+          SELECT CONCAT_WS(' - ',
             (SELECT wd.wardname FROM hpatroom pr LEFT JOIN hward wd ON pr.wardcode = wd.wardcode WHERE pr.hpercode = p.hpercode LIMIT 1),
             (SELECT rm.rmname FROM hpatroom pr LEFT JOIN hroom rm ON pr.rmintkey = rm.rmintkey WHERE pr.hpercode = p.hpercode LIMIT 1),
             (SELECT bd.bdname FROM hpatroom pr LEFT JOIN hbed bd ON pr.bdintkey = bd.bdintkey WHERE pr.hpercode = p.hpercode LIMIT 1)
@@ -164,21 +164,54 @@ async function getPatientList(req, res, next) {
           WHERE he.hpercode = p.hpercode
           LIMIT 1
         ) AS icd_code
-      FROM hperson p
-      LEFT JOIN haddr a ON p.hpercode = a.hpercode
+      FROM (
+        SELECT
+          p_inner.hpercode,
+          p_inner.patlast,
+          p_inner.patfirst,
+          p_inner.patmiddle,
+          p_inner.patsuffix,
+          p_inner.patsex,
+          p_inner.patbdate,
+          p_inner.hfhudcode,
+          p_inner.patbplace,
+          p_inner.patcstat,
+          p_inner.natcode,
+          p_inner.relcode,
+          p_inner.bldtype,
+          p_inner.fatlast,
+          p_inner.fatmid,
+          p_inner.fatfirst,
+          p_inner.motlast,
+          p_inner.motfirst,
+          p_inner.motmid,
+          p_inner.patempstat
+        FROM hperson p_inner
+        ${whereClause}
+        ORDER BY p_inner.patlast, p_inner.patfirst
+        LIMIT ? OFFSET ?
+      ) p
+      LEFT JOIN (
+        SELECT
+          hpercode,
+          MIN(patstr)   AS patstr,
+          MIN(brg)      AS brg,
+          MIN(ctycode)  AS ctycode,
+          MIN(provcode) AS provcode,
+          MIN(patzip)   AS patzip
+        FROM haddr
+        GROUP BY hpercode
+      ) a ON a.hpercode = p.hpercode
       LEFT JOIN hbrgy b ON a.brg = b.bgycode
       LEFT JOIN hcity c ON a.ctycode = c.ctycode
       LEFT JOIN hprov pv ON a.provcode = pv.provcode
       LEFT JOIN hregion r ON c.ctyreg = r.regcode
       LEFT JOIN fhud_hospital fh ON p.hfhudcode = fh.hfhudcode
-      ${whereClause}
-      ORDER BY p.patlast, p.patfirst
-      LIMIT ? OFFSET ?
     `;
 
     const countQuery = `
       SELECT COUNT(*) AS total
-      FROM hperson p
+      FROM hperson p_inner
       ${whereClause}
     `;
 
@@ -297,10 +330,6 @@ async function getPatientHistory(req, res, next) {
         a.deleted_at,
         a.created_at,
         a.discharge_by,
-        a.disnotes,
-        a.dispcode,
-        a.condcode,
-        a.newold,
         e.fhud AS encounter_fhud,
         e.hpercode AS encounter_hpercode,
         e.encdate AS encounter_date,
@@ -328,8 +357,8 @@ async function getPatientHistory(req, res, next) {
           FROM hpersonal hp
           WHERE hp.employeeid = a.admclerk
           LIMIT 1
-        ) AS admitting_clerk
-        ,(
+        ) AS admitting_clerk,
+        (
           SELECT hd.diagcode
           FROM hencdiag hd
           WHERE hd.enccode = a.enccode
@@ -457,37 +486,43 @@ async function searchPatients(req, res, next) {
       ${whereClause}
     `;
 
-    const countQuery = `SELECT COUNT(DISTINCT hdocord.enccode) AS total ${baseJoin}`;
+    // Count unique patients, not encounters/documents
+    const countQuery = `
+      SELECT COUNT(DISTINCT hperson.hpercode) AS total
+      ${baseJoin}
+    `;
     const [[{ total }]] = await pool.query(countQuery, params);
 
+    // Paginate one row per unique patient first (grouped by hpercode),
+    // then join all enrichment data onto that reduced set.
     const [rows] = await pool.query(
       `SELECT
-         hdocord.enccode,
-         henctr.fhud,
-         hdocord.docointkey,
-         hdocord.entryby AS user,
-         hperson.hpercode,
-         hperson.patlast,
-         hperson.patfirst,
-         hperson.patmiddle,
-         CONCAT_WS(' ', hperson.patlast, hperson.patfirst, hperson.patmiddle) AS patient_name,
-         hperson.patsuffix,
-         hperson.patsex,
-         hperson.patbdate,
-         hperson.hfhudcode,
-         hperson.patbplace,
-         hperson.patcstat,
-         hperson.natcode,
-         hperson.relcode,
-         hperson.fatlast,
-         hperson.fatmid,
-         hperson.fatfirst,
-         CONCAT_WS(' ', hperson.fatlast, hperson.fatmid, hperson.fatfirst) AS fathers_name,
-         hperson.motlast,
-         hperson.motfirst,
-         hperson.motmid,
-         CONCAT_WS(' ', hperson.motlast, hperson.motfirst, hperson.motmid) AS mothers_name,
-         hperson.patempstat,
+         p.hpercode AS hospital_number,
+         p.patlast AS last_name,
+         p.patfirst AS first_name,
+         p.patmiddle AS middle_name,
+         CONCAT_WS(' ', p.patlast, p.patfirst, p.patmiddle) AS patient_name,
+         p.patsuffix AS suffix,
+         p.patsex AS sex,
+         p.patbdate AS birth_date,
+         p.hfhudcode AS facility_code,
+         p.patbplace AS birth_place,
+         p.patcstat AS civil_status,
+         p.natcode AS nationality,
+         p.relcode AS religion,
+         p.fatlast AS father_last_name,
+         p.fatmid AS father_middle_name,
+         p.fatfirst AS father_first_name,
+         CONCAT_WS(' ', p.fatlast, p.fatmid, p.fatfirst) AS fathers_name,
+         p.motlast AS mother_last_name,
+         p.motfirst AS mother_first_name,
+         p.motmid AS mother_middle_name,
+         CONCAT_WS(' ', p.motlast, p.motfirst, p.motmid) AS mothers_name,
+         p.patempstat AS employment_status,
+         p.latest_enccode AS enccode,
+         p.latest_docointkey AS docointkey,
+         p.latest_fhud AS fhud,
+         p.latest_user AS user,
          fh.hfhudname AS facility_name,
          a.brg AS bgycode,
          a.patstr,
@@ -502,114 +537,159 @@ async function searchPatients(req, res, next) {
          (
            SELECT ht.pattel
            FROM htelep ht
-           WHERE ht.hpercode = hperson.hpercode
+           WHERE ht.hpercode = p.hpercode
            LIMIT 1
          ) AS telephone_number,
-         (SELECT h.casenum FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS case_number,
-         (SELECT h.patage FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS age,
-         (SELECT h.hpercode FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS hospital_number,
-         (SELECT h.admdate FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS admission_date,
-         (SELECT h.disdate FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS discharge_date,
-         (SELECT h.admtxt FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS chief_complaint,
-         (SELECT h.admnotes FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS admission_diagnosis,
+         (SELECT h.casenum FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS case_number,
+         (SELECT h.patage FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS age,
+         (SELECT h.admdate FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS admission_date,
+         (SELECT h.disdate FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS discharge_date,
+         (SELECT h.admtxt FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS chief_complaint,
+         (SELECT h.admnotes FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS admission_diagnosis,
          (
            SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
            FROM hadmlog h
            LEFT JOIN hprovider pr ON h.licno = pr.licno
            LEFT JOIN hpersonal hp ON pr.employeeid = hp.employeeid
-           WHERE h.hpercode = hperson.hpercode
+           WHERE h.hpercode = p.hpercode
            LIMIT 1
          ) AS requesting_physician,
          (
            SELECT ph.phicnum
            FROM hphiclog ph
-           WHERE ph.hpercode = hperson.hpercode
+           WHERE ph.hpercode = p.hpercode
            LIMIT 1
          ) AS health_number,
          (
            SELECT rm.rmname
            FROM hpatroom pr
            LEFT JOIN hroom rm ON pr.rmintkey = rm.rmintkey
-           WHERE pr.hpercode = hperson.hpercode
+           WHERE pr.hpercode = p.hpercode
            LIMIT 1
          ) AS room_name,
          (
            SELECT bd.bdname
            FROM hpatroom pr
            LEFT JOIN hbed bd ON pr.bdintkey = bd.bdintkey
-           WHERE pr.hpercode = hperson.hpercode
+           WHERE pr.hpercode = p.hpercode
            LIMIT 1
          ) AS bed_name,
          (
            SELECT wd.wardname
            FROM hpatroom pr
            LEFT JOIN hward wd ON pr.wardcode = wd.wardcode
-           WHERE pr.hpercode = hperson.hpercode
+           WHERE pr.hpercode = p.hpercode
            LIMIT 1
          ) AS ward_name,
          (
-           SELECT CONCAT_WS(' - ', 
-             (SELECT wd.wardname FROM hpatroom pr LEFT JOIN hward wd ON pr.wardcode = wd.wardcode WHERE pr.hpercode = hperson.hpercode LIMIT 1),
-             (SELECT rm.rmname FROM hpatroom pr LEFT JOIN hroom rm ON pr.rmintkey = rm.rmintkey WHERE pr.hpercode = hperson.hpercode LIMIT 1),
-             (SELECT bd.bdname FROM hpatroom pr LEFT JOIN hbed bd ON pr.bdintkey = bd.bdintkey WHERE pr.hpercode = hperson.hpercode LIMIT 1)
+           SELECT CONCAT_WS(' - ',
+             (SELECT wd.wardname FROM hpatroom pr LEFT JOIN hward wd ON pr.wardcode = wd.wardcode WHERE pr.hpercode = p.hpercode LIMIT 1),
+             (SELECT rm.rmname FROM hpatroom pr LEFT JOIN hroom rm ON pr.rmintkey = rm.rmintkey WHERE pr.hpercode = p.hpercode LIMIT 1),
+             (SELECT bd.bdname FROM hpatroom pr LEFT JOIN hbed bd ON pr.bdintkey = bd.bdintkey WHERE pr.hpercode = p.hpercode LIMIT 1)
            )
          ) AS room_number,
-         (SELECT vs.vsbp FROM hvitalsign vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS blood_pressure,
-         (SELECT vs.vstemp FROM hvitalsign vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS temperature,
-         (SELECT vs.vspulse FROM hvitalsign vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS pulse,
-         (SELECT vs.vsresp FROM hvitalsign vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS resp,
-         (SELECT vs.o2sats FROM hvitalsign vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS o2sats,
-         (SELECT vs.vsweight FROM hvsothr vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS weight,
-         (SELECT vs.vsheight FROM hvsothr vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS height,
-         (SELECT vs.vsbmi FROM hvsothr vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS bmi,
-         (SELECT vs.vsbmicat FROM hvsothr vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS bmi_category,
+         (SELECT vs.vsbp FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS blood_pressure,
+         (SELECT vs.vstemp FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS temperature,
+         (SELECT vs.vspulse FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS pulse,
+         (SELECT vs.vsresp FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS resp,
+         (SELECT vs.o2sats FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS o2sats,
+         (SELECT vs.vsweight FROM hvsothr vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS weight,
+         (SELECT vs.vsheight FROM hvsothr vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS height,
+         (SELECT vs.vsbmi FROM hvsothr vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS bmi,
+         (SELECT vs.vsbmicat FROM hvsothr vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS bmi_category,
          (
            SELECT ts.tsdesc
            FROM hpatroom pr
            LEFT JOIN hward wd ON pr.wardcode = wd.wardcode
            LEFT JOIN htypser ts ON wd.tscode = ts.tscode
-           WHERE pr.hpercode = hperson.hpercode
+           WHERE pr.hpercode = p.hpercode
            LIMIT 1
          ) AS ward_category,
-         (SELECT h.disnotes FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS discharge_diagnosis,
-         (SELECT h.dispcode FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS disposition,
-         (SELECT h.condcode FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS 'condition',
-         (SELECT h.newold FROM hadmlog h WHERE h.hpercode = hperson.hpercode LIMIT 1) AS type_of_admission,
-         (SELECT vs.fetal_heart_rate FROM hvitalsign vs WHERE vs.hpercode = hperson.hpercode LIMIT 1) AS fetal_heart_rate,
+         (SELECT h.disnotes FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS discharge_diagnosis,
+         (SELECT h.dispcode FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS disposition,
+         (SELECT h.condcode FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS 'condition',
+         (SELECT h.newold FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS type_of_admission,
+         (SELECT vs.fetal_heart_rate FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS fetal_heart_rate,
          (
            SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
            FROM hadmlog h
            LEFT JOIN hpersonal hp ON h.admclerk = hp.employeeid
-           WHERE h.hpercode = hperson.hpercode
+           WHERE h.hpercode = p.hpercode
            LIMIT 1
          ) AS admitting_clerk,
          (
            SELECT hd.diagcode
            FROM hencdiag hd
            INNER JOIN henctr he ON he.enccode = hd.enccode
-           WHERE he.hpercode = hperson.hpercode
+           WHERE he.hpercode = p.hpercode
            LIMIT 1
          ) AS icd_code
        FROM (
          SELECT
-           hdocord.enccode,
-           MAX(hdocord.docointkey) AS docointkey
+           hperson.hpercode,
+           hperson.patlast,
+           hperson.patfirst,
+           hperson.patmiddle,
+           hperson.patsuffix,
+           hperson.patsex,
+           hperson.patbdate,
+           hperson.hfhudcode,
+           hperson.patbplace,
+           hperson.patcstat,
+           hperson.natcode,
+           hperson.relcode,
+           hperson.fatlast,
+           hperson.fatmid,
+           hperson.fatfirst,
+           hperson.motlast,
+           hperson.motfirst,
+           hperson.motmid,
+           hperson.patempstat,
+           MAX(hdocord.enccode)    AS latest_enccode,
+           MAX(hdocord.docointkey) AS latest_docointkey,
+           MAX(henctr.fhud)        AS latest_fhud,
+           MAX(hdocord.entryby)    AS latest_user
          ${baseJoin}
-         GROUP BY hdocord.enccode
-       ) latest
-       INNER JOIN hdocord
-         ON hdocord.enccode = latest.enccode
-         AND hdocord.docointkey = latest.docointkey
-       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
-       LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
-       LEFT JOIN haddr a ON hperson.hpercode = a.hpercode
+         GROUP BY
+           hperson.hpercode,
+           hperson.patlast,
+           hperson.patfirst,
+           hperson.patmiddle,
+           hperson.patsuffix,
+           hperson.patsex,
+           hperson.patbdate,
+           hperson.hfhudcode,
+           hperson.patbplace,
+           hperson.patcstat,
+           hperson.natcode,
+           hperson.relcode,
+           hperson.fatlast,
+           hperson.fatmid,
+           hperson.fatfirst,
+           hperson.motlast,
+           hperson.motfirst,
+           hperson.motmid,
+           hperson.patempstat
+         ORDER BY MAX(hdocord.docointkey) DESC
+         LIMIT ? OFFSET ?
+       ) p
+       LEFT JOIN (
+         SELECT
+           hpercode,
+           MIN(patstr)   AS patstr,
+           MIN(brg)      AS brg,
+           MIN(ctycode)  AS ctycode,
+           MIN(provcode) AS provcode,
+           MIN(patzip)   AS patzip
+         FROM haddr
+         GROUP BY hpercode
+       ) a ON a.hpercode = p.hpercode
        LEFT JOIN hbrgy b ON a.brg = b.bgycode
        LEFT JOIN hcity c ON a.ctycode = c.ctycode
        LEFT JOIN hprov pv ON a.provcode = pv.provcode
        LEFT JOIN hregion r ON c.ctyreg = r.regcode
-       LEFT JOIN fhud_hospital fh ON hperson.hfhudcode = fh.hfhudcode
-       ORDER BY hdocord.docointkey DESC, hdocord.enccode DESC
-       LIMIT ? OFFSET ?`,
+       LEFT JOIN fhud_hospital fh ON p.hfhudcode = fh.hfhudcode
+       ORDER BY p.latest_docointkey DESC`,
       [...params, limit, offset],
     );
 
@@ -619,9 +699,9 @@ async function searchPatients(req, res, next) {
       fhud: row.fhud || "",
       docointkey: row.docointkey || "",
       user: row.user || "",
-      firstName: row.patfirst || "",
-      middleName: row.patmiddle || "",
-      lastName: row.patlast || "",
+      firstName: row.first_name || "",
+      middleName: row.middle_name || "",
+      lastName: row.last_name || "",
     }));
 
     res.json({
