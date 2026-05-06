@@ -19,6 +19,7 @@ const {
   getHenctrInfo,
   getLatestEncounterForPatient,
   getPatientEncounterRecords,
+  getEncountersForPatient,
 } = require("../controllers/encounterController");
 
 // Form endpoints
@@ -63,6 +64,9 @@ router.get(
   "/patients/:hpercode/encounters/:enccode/records",
   getPatientEncounterRecords,
 );
+
+// Lab upload flow - patient encounters list (for modal selection)
+router.get("/patients/:hpercode/encounters", getEncountersForPatient);
 
 // Form routes
 router.get("/forms/baby", listBabyFormRecords);

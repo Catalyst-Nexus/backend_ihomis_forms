@@ -207,8 +207,66 @@ async function getPatientEncounterRecords(req, res, next) {
   }
 }
 
+/**
+ * GET /api/db/patients/:hpercode/encounters
+ * Get all encounters for a patient (used by the encounter selection modal)
+ * Returns multiple encounters so the user can pick which one to use.
+ */
+async function getEncountersForPatient(req, res, next) {
+  try {
+    const hpercode = String(req.params.hpercode || "").trim();
+
+    if (!hpercode) {
+      return res.status(400).json({
+        ok: false,
+        message: "hpercode is required",
+      });
+    }
+
+    const parsedLimit = Number.parseInt(req.query.limit, 10);
+    const parsedOffset = Number.parseInt(req.query.offset, 10);
+    const limit = Number.isNaN(parsedLimit)
+      ? 50
+      : Math.min(Math.max(parsedLimit, 1), 200);
+    const offset = Number.isNaN(parsedOffset) ? 0 : Math.max(parsedOffset, 0);
+
+    // Fetch encounters from henctr joined with hadmlog for admission/discharge info
+    const [rows] = await pool.query(
+      `SELECT
+         henctr.enccode,
+         henctr.hpercode,
+         henctr.fhud,
+         henctr.toecode,
+         henctr.encstat,
+         DATE_FORMAT(henctr.encdate, '%Y-%m-%d') AS encdates,
+         DATE_FORMAT(henctr.enctime, '%H:%i:%s') AS enctime,
+         DATE_FORMAT(hadmlog.admdate, '%Y-%m-%d') AS admdate,
+         DATE_FORMAT(hadmlog.admtime, '%H:%i:%s') AS admtime,
+         DATE_FORMAT(hadmlog.disdate, '%Y-%m-%d') AS disdate,
+         DATE_FORMAT(hadmlog.distime, '%H:%i:%s') AS distime
+       FROM henctr
+       LEFT JOIN hadmlog ON hadmlog.enccode = henctr.enccode
+       WHERE henctr.hpercode = ?
+       ORDER BY henctr.encdate DESC, henctr.enctime DESC, henctr.enccode DESC
+       LIMIT ? OFFSET ?`,
+      [hpercode, limit, offset],
+    );
+
+    return res.json({
+      ok: true,
+      hpercode,
+      count: rows.length,
+      pagination: { limit, offset },
+      data: rows,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getHenctrInfo,
   getLatestEncounterForPatient,
   getPatientEncounterRecords,
+  getEncountersForPatient,
 };
