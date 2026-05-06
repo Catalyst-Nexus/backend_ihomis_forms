@@ -1,4 +1,5 @@
 const express = require("express");
+const multer = require("multer");
 
 // Health & Status endpoints
 const {
@@ -22,6 +23,13 @@ const {
   getEncountersForPatient,
 } = require("../controllers/encounterController");
 
+// Lab Upload endpoints
+const {
+  getOrdersForEncounter,
+  getProceduresForOrder,
+  registerLabResultUpload,
+} = require("../controllers/labUploadController");
+
 // Form endpoints
 const {
   listBabyFormRecords,
@@ -42,6 +50,19 @@ const {
 } = require("../controllers/userController");
 
 const router = express.Router();
+
+// Multer configuration for lab result uploads (multipart/form-data)
+const labUploadMulter = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === "application/pdf" || file.mimetype.startsWith("application/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only PDF files are allowed"), false);
+    }
+  },
+});
 
 // Health & Status routes
 router.get("/status", dbStatus);
@@ -80,5 +101,33 @@ router.get("/chart-tracking/summary", getChartTrackingSummary);
 router.get("/users", getUsers);
 router.get("/users/by-employee/:employeeId", searchUserByEmployeeId);
 router.get("/users/:userId", getUserById);
+
+// ============================================================
+// Lab Upload Workflow Routes
+// Patient → Encounter → Order → Procedure → Upload → Finalize
+// ============================================================
+
+// GET /api/db/encounters/:enccode/orders
+// Fetch lab/radiology orders for an encounter
+router.get("/encounters/:enccode/orders", getOrdersForEncounter);
+
+// GET /api/db/encounters/:enccode/orders/:orcode/procedures
+// Fetch procedures (line items) for a specific order
+router.get(
+  "/encounters/:enccode/orders/:orcode/procedures",
+  getProceduresForOrder,
+);
+
+// POST /api/db/lab-results
+// Upload a lab result PDF:
+//   1. Validate patient + encounter exist in MySQL
+//   2. Upload PDF to Supabase storage
+//   3. Insert metadata into lab_result_uploads table
+//   4. Return docointkey for tracking
+router.post(
+  "/lab-results",
+  labUploadMulter.single("file"),
+  registerLabResultUpload,
+);
 
 module.exports = router;

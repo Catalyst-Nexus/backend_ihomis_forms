@@ -1,0 +1,398 @@
+/**
+ * Lab Upload Controller
+ *
+ * Workflow: Patient → Encounter → Order → Procedure → Upload → Finalize
+ *
+ * Architecture:
+ *   - MySQL    : Source of truth for hospital identifiers (hpercode, enccode, orcode, procode)
+ *   - Supabase: PDF file storage (Storage API) + upload metadata (lab_result_uploads table)
+ *
+ * Key identifiers:
+ *   - hpercode  : patient ID  (from MySQL patregistry)
+ *   - enccode   : encounter ID (from MySQL henctr)
+ *   - orcode    : order ID     (from MySQL hdocord)
+ *   - procode   : procedure ID (from MySQL pcchrgcod)
+ *   - docointkey: document tracking key — auto-generated on upload
+ */
+
+const pool = require("../config/db");
+const { createClient } = require("@supabase/supabase-js");
+
+// ── Supabase admin client (lazy init) ──────────────────────────
+let _supabaseAdmin = null;
+
+function getSupabaseAdmin() {
+  if (_supabaseAdmin) return _supabaseAdmin;
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error(
+      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    );
+  }
+
+  _supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  return _supabaseAdmin;
+}
+
+/**
+ * Generate a unique docointkey.
+ * Format: LR{YYYYMMDD}{seq}  e.g. LR2026050600001
+ * Queries the existing lab_result_uploads table in Supabase for the next seq.
+ */
+async function generateDocointkey(supabase) {
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const prefix = `LR${today}`;
+
+  const { data, error } = await supabase
+    .from("lab_result_uploads")
+    .select("docointkey")
+    .like("docointkey", `${prefix}%`)
+    .order("docointkey", { ascending: false })
+    .limit(1);
+
+  let nextSeq = 1;
+  if (!error && data && data.length > 0) {
+    const lastKey = data[0].docointkey || "";
+    const lastSeq = parseInt(lastKey.replace(prefix, ""), 10);
+    nextSeq = isNaN(lastSeq) ? 1 : lastSeq + 1;
+  }
+
+  return `${prefix}${String(nextSeq).padStart(5, "0")}`;
+}
+
+// ── MySQL validation helpers ────────────────────────────────────
+
+async function validatePatientInMySQL(hpercode) {
+  const [rows] = await pool.query(
+    "SELECT hpercode, patlast, patfirst, patmiddle FROM patregistry WHERE hpercode = ? LIMIT 1",
+    [hpercode],
+  );
+  return rows[0] || null;
+}
+
+async function validateEncounterInMySQL(enccode, hpercode) {
+  const [rows] = await pool.query(
+    "SELECT enccode, hpercode, fhud, toecode FROM henctr WHERE enccode = ? AND hpercode = ? LIMIT 1",
+    [enccode, hpercode],
+  );
+  return rows[0] || null;
+}
+
+async function validateOrderInMySQL(orcode, enccode) {
+  const [rows] = await pool.query(
+    "SELECT orcode, enccode, ordcode, oritem, ordate, ortime, estatus FROM hdocord WHERE orcode = ? AND enccode = ? LIMIT 1",
+    [orcode, enccode],
+  );
+  return rows[0] || null;
+}
+
+// ── Route handlers ─────────────────────────────────────────────
+
+/**
+ * GET /api/db/encounters/:enccode/orders
+ * Fetch lab/radiology orders for a specific encounter from MySQL.
+ *
+ * Query params:
+ *   - type: 'lab' | 'rad' | 'all' (default: 'all')
+ *   - status: order estatus filter (default: 'S')
+ */
+async function getOrdersForEncounter(req, res, next) {
+  try {
+    const { enccode } = req.params;
+    const orderType = req.query.type || "all";
+    const status = req.query.status || "S";
+
+    if (!enccode) {
+      return res.status(400).json({ ok: false, message: "enccode is required" });
+    }
+
+    let typeCondition = "";
+    if (orderType === "lab") {
+      typeCondition = "AND (hdocord.ordcode LIKE 'LAB%' OR hdocord.ordcode LIKE 'CLINIC-LAB%')";
+    } else if (orderType === "rad") {
+      typeCondition =
+        "AND (hdocord.ordcode LIKE 'RAD%' OR hdocord.ordcode LIKE 'XRAY%' OR hdocord.ordcode LIKE 'ULTRASOUND%')";
+    }
+
+    const [rows] = await pool.query(
+      `SELECT
+         hdocord.orcode,
+         hdocord.enccode,
+         hdocord.ordcode,
+         hdocord.oritem,
+         DATE_FORMAT(hdocord.ordate, '%Y-%m-%d') AS ordate,
+         DATE_FORMAT(hdocord.ortime, '%H:%i:%s') AS ortime,
+         hdocord.estatus,
+         hdocord.entryby,
+         hdocord.docointkey,
+         henctr.hpercode,
+         patregistry.patlast,
+         patregistry.patfirst,
+         patregistry.patmiddle
+       FROM hdocord
+       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
+       INNER JOIN patregistry ON patregistry.hpercode = henctr.hpercode
+       WHERE hdocord.enccode = ?
+         AND hdocord.estatus = ?
+         ${typeCondition}
+       ORDER BY hdocord.ordate DESC, hdocord.ortime DESC, hdocord.orcode DESC`,
+      [enccode, status],
+    );
+
+    return res.json({ ok: true, enccode, orderType, count: rows.length, data: rows });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/db/encounters/:enccode/orders/:orcode/procedures
+ * Fetch procedures (line items) for a specific order from MySQL (pcchrgcod table).
+ *
+ * Query params:
+ *   - procedureInstanceId: filter by specific procode
+ */
+async function getProceduresForOrder(req, res, next) {
+  try {
+    const { enccode, orcode } = req.params;
+    const { procedureInstanceId } = req.query;
+
+    if (!enccode || !orcode) {
+      return res.status(400).json({
+        ok: false,
+        message: "enccode and orcode are required",
+      });
+    }
+
+    let instanceCondition = "";
+    const params = [enccode, orcode];
+
+    if (procedureInstanceId) {
+      instanceCondition = "AND pcchrgcod.procode = ?";
+      params.push(procedureInstanceId);
+    }
+
+    const [rows] = await pool.query(
+      `SELECT
+         pcchrgcod.procode     AS procedureInstanceId,
+         pcchrgcod.orcode,
+         pcchrgcod.enccode,
+         pcchrgcod.chrgcod,
+         pcchrgcod.procdesc   AS procedureDescription,
+         pcchrgcod.procdate   AS procedureDate,
+         pcchrgcod.proctime   AS procedureTime,
+         pcchrgcod.procstatus AS procedureStatus,
+         pcchrgcod.provcode   AS providerCode,
+         pcchrgcod.entryby    AS enteredBy,
+         DATE_FORMAT(pcchrgcod.procdate, '%Y-%m-%d') AS procdate_formatted,
+         DATE_FORMAT(pcchrgcod.proctime, '%H:%i:%s') AS proctime_formatted,
+         hdocord.ordcode,
+         hdocord.oritem
+       FROM pcchrgcod
+       INNER JOIN hdocord ON hdocord.orcode = pcchrgcod.orcode
+       WHERE pcchrgcod.enccode = ?
+         AND pcchrgcod.orcode = ?
+         ${instanceCondition}
+       ORDER BY pcchrgcod.procdate DESC, pcchrgcod.proctime DESC,
+         pcchrgcod.procode DESC`,
+      params,
+    );
+
+    return res.json({ ok: true, enccode, orcode, count: rows.length, data: rows });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * POST /api/db/lab-results
+ *
+ * Finalize a lab upload:
+ *   1. Validate patient + encounter exist in MySQL (source of truth)
+ *   2. Upload PDF to Supabase Storage
+ *   3. Insert upload metadata into Supabase lab_result_uploads table
+ *   4. Return docointkey for tracking
+ *
+ * Multipart/form-data fields:
+ *   - file                  : PDF file (required)
+ *   - hpercode              : patient ID (required)
+ *   - enccode               : encounter ID (required)
+ *   - orcode                : order ID (optional)
+ *   - procode               : procedure ID from pcchrgcod (optional)
+ *   - procedureInstanceId   : alias for procode (optional)
+ *   - docointkey            : tracking key — auto-generated if not provided
+ *   - remarks               : upload remarks (optional)
+ *   - uploadedBy            : user who uploaded (optional)
+ */
+async function registerLabResultUpload(req, res, next) {
+  try {
+    const {
+      hpercode,
+      enccode,
+      orcode = null,
+      procode = null,
+      procedureInstanceId = null,
+      docointkey: providedDocointkey = null,
+      remarks = "",
+      uploadedBy = null,
+    } = req.body;
+
+    const file = req.file; // multer puts parsed fields here
+
+    // ── 1. Validate required fields ──────────────────────────────
+    if (!hpercode) {
+      return res.status(400).json({ ok: false, message: "hpercode is required" });
+    }
+    if (!enccode) {
+      return res.status(400).json({ ok: false, message: "enccode is required" });
+    }
+    if (!file) {
+      return res.status(400).json({ ok: false, message: "PDF file is required" });
+    }
+
+    // ── 2. Validate patient in MySQL ─────────────────────────────
+    const patient = await validatePatientInMySQL(hpercode);
+    if (!patient) {
+      return res.status(404).json({ ok: false, message: "Patient not found" });
+    }
+
+    // ── 3. Validate encounter in MySQL ──────────────────────────
+    const encounter = await validateEncounterInMySQL(enccode, hpercode);
+    if (!encounter) {
+      return res.status(404).json({ ok: false, message: "Encounter not found" });
+    }
+
+    // ── 4. Validate order in MySQL if provided ───────────────────
+    if (orcode) {
+      const order = await validateOrderInMySQL(orcode, enccode);
+      if (!order) {
+        return res.status(404).json({ ok: false, message: "Order not found" });
+      }
+    }
+
+    // ── 5. Resolve procode ───────────────────────────────────────
+    // procode takes precedence; procedureInstanceId is an alias
+    const resolvedProcode = procode || procedureInstanceId || null;
+
+    // ── 6. Get Supabase client and generate docointkey ──────────
+    const supabase = getSupabaseAdmin();
+    const docointkey = providedDocointkey || (await generateDocointkey(supabase));
+
+    // ── 7. Upload PDF to Supabase Storage ───────────────────────
+    const bucketName = process.env.SUPABASE_LAB_BUCKET || "lab-results";
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const safeName = String(file.originalname || "lab_result.pdf")
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, "_");
+    const storagePath = `lab-results/${enccode}/${timestamp}-${safeName}`;
+
+    let uploadedUrl;
+    try {
+      const { error: uploadError } = await supabase.storage
+        .from(bucketName)
+        .upload(storagePath, file.buffer, {
+          contentType: file.mimetype || "application/pdf",
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        throw new Error(uploadError.message || "Supabase Storage upload failed");
+      }
+
+      // Build URL — prefer signed URL if configured
+      const useSigned =
+        String(process.env.SUPABASE_USE_SIGNED_URL || "true").toLowerCase() === "true";
+      const signedTtl = Number(process.env.SUPABASE_SIGNED_URL_TTL || 3600);
+
+      if (useSigned) {
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from(bucketName)
+          .createSignedUrl(storagePath, signedTtl);
+
+        if (!signedError && signedData?.signedUrl) {
+          uploadedUrl = signedData.signedUrl;
+        }
+      }
+
+      if (!uploadedUrl) {
+        const { data: publicData } = supabase.storage
+          .from(bucketName)
+          .getPublicUrl(storagePath);
+        uploadedUrl =
+          publicData?.publicUrl ||
+          `https://${bucketName}.supabase.co/storage/v1/object/public/${storagePath}`;
+      }
+    } catch (supabaseError) {
+      return res.status(502).json({
+        ok: false,
+        message: `Supabase upload failed: ${supabaseError.message}`,
+      });
+    }
+
+    // ── 8. Insert metadata into Supabase lab_result_uploads ─────
+    // Column names match the existing Supabase schema exactly:
+    // hpercode, enccode, orcode, procode, procedure_instance_id, docointkey, ...
+    const { data: insertData, error: insertError } = await supabase
+      .from("lab_result_uploads")
+      .insert({
+        hpercode,
+        enccode,
+        orcode: orcode || null,
+        procode: resolvedProcode || null,
+        procedure_instance_id: resolvedProcode || null,
+        docointkey,
+        file_name: file.originalname || "lab_result.pdf",
+        file_url: uploadedUrl,
+        storage_path: storagePath,
+        file_size: file.size,
+        content_type: file.mimetype || "application/pdf",
+        uploaded_by: uploadedBy || null,
+        remarks: remarks || null,
+        source: "lab-upload",
+        is_signed_url: useSigned,
+        url_expires_at: useSigned
+          ? new Date(Date.now() + signedTtl * 1000).toISOString()
+          : null,
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      // Rollback: remove uploaded file if metadata insert failed
+      await supabase.storage.from(bucketName).remove([storagePath]);
+      return res.status(502).json({
+        ok: false,
+        message: `Failed to save upload record: ${insertError.message}`,
+      });
+    }
+
+    return res.status(201).json({
+      ok: true,
+      docointkey,
+      uploadedPdfUrl: uploadedUrl,
+      fileName: file.originalname,
+      fileSize: file.size,
+      patientId: hpercode,
+      encounterCode: enccode,
+      orderCode: orcode,
+      procode: resolvedProcode,
+      procedureInstanceId: resolvedProcode,
+      message: "Lab result uploaded successfully",
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = {
+  getOrdersForEncounter,
+  getProceduresForOrder,
+  registerLabResultUpload,
+};
