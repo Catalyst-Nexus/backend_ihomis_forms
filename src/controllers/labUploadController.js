@@ -109,12 +109,15 @@ async function getOrdersForEncounter(req, res, next) {
     const status = req.query.status || "S";
 
     if (!enccode) {
-      return res.status(400).json({ ok: false, message: "enccode is required" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "enccode is required" });
     }
 
     let typeCondition = "";
     if (orderType === "lab") {
-      typeCondition = "AND (hdocord.ordcode LIKE 'LAB%' OR hdocord.ordcode LIKE 'CLINIC-LAB%')";
+      typeCondition =
+        "AND (hdocord.ordcode LIKE 'LAB%' OR hdocord.ordcode LIKE 'CLINIC-LAB%')";
     } else if (orderType === "rad") {
       typeCondition =
         "AND (hdocord.ordcode LIKE 'RAD%' OR hdocord.ordcode LIKE 'XRAY%' OR hdocord.ordcode LIKE 'ULTRASOUND%')";
@@ -145,7 +148,13 @@ async function getOrdersForEncounter(req, res, next) {
       [enccode, status],
     );
 
-    return res.json({ ok: true, enccode, orderType, count: rows.length, data: rows });
+    return res.json({
+      ok: true,
+      enccode,
+      orderType,
+      count: rows.length,
+      data: rows,
+    });
   } catch (error) {
     return next(error);
   }
@@ -204,7 +213,13 @@ async function getProceduresForOrder(req, res, next) {
       params,
     );
 
-    return res.json({ ok: true, enccode, orcode, count: rows.length, data: rows });
+    return res.json({
+      ok: true,
+      enccode,
+      orcode,
+      count: rows.length,
+      data: rows,
+    });
   } catch (error) {
     return next(error);
   }
@@ -247,13 +262,19 @@ async function registerLabResultUpload(req, res, next) {
 
     // ── 1. Validate required fields ──────────────────────────────
     if (!hpercode) {
-      return res.status(400).json({ ok: false, message: "hpercode is required" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "hpercode is required" });
     }
     if (!enccode) {
-      return res.status(400).json({ ok: false, message: "enccode is required" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "enccode is required" });
     }
     if (!file) {
-      return res.status(400).json({ ok: false, message: "PDF file is required" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "PDF file is required" });
     }
 
     // ── 2. Validate patient in MySQL ─────────────────────────────
@@ -265,7 +286,9 @@ async function registerLabResultUpload(req, res, next) {
     // ── 3. Validate encounter in MySQL ──────────────────────────
     const encounter = await validateEncounterInMySQL(enccode, hpercode);
     if (!encounter) {
-      return res.status(404).json({ ok: false, message: "Encounter not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "Encounter not found" });
     }
 
     // ── 4. Validate order in MySQL if provided ───────────────────
@@ -282,7 +305,8 @@ async function registerLabResultUpload(req, res, next) {
 
     // ── 6. Get Supabase client and generate docointkey ──────────
     const supabase = getSupabaseAdmin();
-    const docointkey = providedDocointkey || (await generateDocointkey(supabase));
+    const docointkey =
+      providedDocointkey || (await generateDocointkey(supabase));
 
     // ── 7. Upload PDF to Supabase Storage ───────────────────────
     const bucketName = process.env.SUPABASE_LAB_BUCKET || "lab-results";
@@ -303,12 +327,15 @@ async function registerLabResultUpload(req, res, next) {
         });
 
       if (uploadError) {
-        throw new Error(uploadError.message || "Supabase Storage upload failed");
+        throw new Error(
+          uploadError.message || "Supabase Storage upload failed",
+        );
       }
 
       // Build URL — prefer signed URL if configured
       const useSigned =
-        String(process.env.SUPABASE_USE_SIGNED_URL || "true").toLowerCase() === "true";
+        String(process.env.SUPABASE_USE_SIGNED_URL || "true").toLowerCase() ===
+        "true";
       const signedTtl = Number(process.env.SUPABASE_SIGNED_URL_TTL || 3600);
 
       if (useSigned) {
