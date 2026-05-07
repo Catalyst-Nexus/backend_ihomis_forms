@@ -70,7 +70,7 @@ async function generateDocointkey(supabase) {
 
 async function validatePatientInMySQL(hpercode) {
   const [rows] = await pool.query(
-    "SELECT hpercode, patlast, patfirst, patmiddle FROM patregistry WHERE hpercode = ? LIMIT 1",
+    "SELECT hpercode, patlast, patfirst, patmiddle FROM hperson WHERE hpercode = ? LIMIT 1",
     [hpercode],
   );
   return rows[0] || null;
@@ -135,12 +135,12 @@ async function getOrdersForEncounter(req, res, next) {
          hdocord.entryby,
          hdocord.docointkey,
          henctr.hpercode,
-         patregistry.patlast,
-         patregistry.patfirst,
-         patregistry.patmiddle
+         hperson.patlast,
+         hperson.patfirst,
+         hperson.patmiddle
        FROM hdocord
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
-       INNER JOIN patregistry ON patregistry.hpercode = henctr.hpercode
+       INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
        WHERE hdocord.enccode = ?
          AND hdocord.estatus = ?
          ${typeCondition}
