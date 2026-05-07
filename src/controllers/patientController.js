@@ -479,13 +479,17 @@ async function searchPatients(req, res, next) {
     const [[{ total }]] = await pool.query(countSql, baseParams);
 
     // Get distinct patient hpercodes first (for consistent pagination)
+    // Must include ORDER BY columns in SELECT for MySQL DISTINCT compatibility
     const patientIdsSql = `
-      SELECT DISTINCT henctr.hpercode
+      SELECT DISTINCT 
+        henctr.hpercode,
+        COALESCE(hperson.patlast, '') AS patlast,
+        COALESCE(hperson.patfirst, '') AS patfirst
       FROM hdocord
       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
       LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
       WHERE ${baseWhere}
-      ORDER BY hperson.patlast, hperson.patfirst, henctr.hpercode
+      ORDER BY patlast, patfirst, henctr.hpercode
       LIMIT ? OFFSET ?
     `;
     const [patientIds] = await pool.query(patientIdsSql, [...baseParams, limit, offset]);
