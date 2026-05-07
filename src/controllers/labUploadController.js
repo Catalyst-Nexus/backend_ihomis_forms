@@ -128,6 +128,7 @@ async function getOrdersForEncounter(req, res, next) {
       `SELECT
          hdocord.enccode,
          hdocord.docointkey,
+         hdocord.orcode,
          hdocord.entryby,
          DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS ordate,
          DATE_FORMAT(hdocord.dotime, '%H:%i:%s') AS ortime,
