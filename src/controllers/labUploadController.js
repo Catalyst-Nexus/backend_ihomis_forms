@@ -101,6 +101,12 @@ async function validateOrderInMySQL(docointkey, enccode) {
  * Query params:
  *   - type: 'lab' | 'rad' | 'all' (default: 'all')
  *   - status: order estatus filter (default: 'S')
+ * 
+ * orcode values in hdocord:
+ *   - LABOR = Laboratory orders
+ *   - RADIO = Radiology orders
+ *   - DISCH = Discharge orders
+ *   - DIETT = Diet orders
  */
 async function getOrdersForEncounter(req, res, next) {
   try {
@@ -114,8 +120,16 @@ async function getOrdersForEncounter(req, res, next) {
         .json({ ok: false, message: "enccode is required" });
     }
 
-    // Note: ordcode column may not exist in hdocord, so type filtering is skipped for now
-    // All orders are returned if no type filter is needed
+    // Build type filter based on orcode column
+    // LABOR = Lab, RADIO = Radiology
+    let typeCondition = "";
+    if (orderType === "lab") {
+      typeCondition = "AND hdocord.orcode = 'LABOR'";
+    } else if (orderType === "rad") {
+      typeCondition = "AND hdocord.orcode = 'RADIO'";
+    }
+    // 'all' returns all orders without type filter
+
     let statusCondition = "";
     const params = [enccode];
     
@@ -141,9 +155,11 @@ async function getOrdersForEncounter(req, res, next) {
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
        INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
        WHERE hdocord.enccode = ?
+       ${typeCondition}
+       ${statusCondition}
        ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC
        LIMIT 100`,
-      [enccode],
+      params,
     );
 
     return res.json({
