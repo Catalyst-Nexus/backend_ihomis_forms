@@ -107,6 +107,9 @@ async function validateOrderInMySQL(docointkey, enccode) {
  *   - RADIO = Radiology orders
  *   - DISCH = Discharge orders
  *   - DIETT = Diet orders
+ * 
+ * proccode format: LABOR####, RADIO####, XRAY####, etc.
+ * proccode is joined with hprocm to get procdesc (description)
  */
 async function getOrdersForEncounter(req, res, next) {
   try {
@@ -143,6 +146,7 @@ async function getOrdersForEncounter(req, res, next) {
          hdocord.enccode,
          hdocord.docointkey,
          hdocord.orcode,
+         hdocord.proccode,
          hdocord.entryby,
          DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS ordate,
          DATE_FORMAT(hdocord.dotime, '%H:%i:%s') AS ortime,
@@ -150,10 +154,12 @@ async function getOrdersForEncounter(req, res, next) {
          henctr.hpercode,
          hperson.patlast,
          hperson.patfirst,
-         hperson.patmiddle
+         hperson.patmiddle,
+         hprocm.procdesc AS procedureDescription
        FROM hdocord
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
        INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
+       LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
        WHERE hdocord.enccode = ?
        ${typeCondition}
        ${statusCondition}
