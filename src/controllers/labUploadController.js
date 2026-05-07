@@ -416,8 +416,45 @@ async function registerLabResultUpload(req, res, next) {
   }
 }
 
+/**
+ * GET /api/db/debug/schema
+ * Debug endpoint to check actual table schemas
+ */
+async function debugSchema(req, res, next) {
+  try {
+    const [tables] = await pool.query(
+      `SELECT TABLE_NAME 
+       FROM INFORMATION_SCHEMA.TABLES 
+       WHERE TABLE_SCHEMA = DATABASE() 
+       AND TABLE_NAME IN ('hdocord', 'henctr', 'hperson', 'pcchrgcod', 'hpercode', 'hadmlog')
+       ORDER BY TABLE_NAME`
+    );
+
+    const schemas = {};
+    for (const { TABLE_NAME } of tables) {
+      const [columns] = await pool.query(
+        `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+         ORDER BY ORDINAL_POSITION`,
+        [TABLE_NAME]
+      );
+      schemas[TABLE_NAME] = columns;
+    }
+
+    res.json({
+      ok: true,
+      tables: tables.map(t => t.TABLE_NAME),
+      schemas
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getOrdersForEncounter,
   getProceduresForOrder,
   registerLabResultUpload,
+  debugSchema,
 };

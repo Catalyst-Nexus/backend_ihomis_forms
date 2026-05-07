@@ -28,6 +28,7 @@ const {
   getOrdersForEncounter,
   getProceduresForOrder,
   registerLabResultUpload,
+  debugSchema,
 } = require("../controllers/labUploadController");
 
 // Form endpoints
@@ -71,6 +72,9 @@ const labUploadMulter = multer({
 router.get("/status", dbStatus);
 router.get("/tables", listTables);
 router.get("/info", dbInfo);
+
+// Debug route - check actual table schemas
+router.get("/debug/schema", debugSchema);
 
 // Encounter routes
 router.get("/henctr", getHenctrInfo);
