@@ -422,101 +422,69 @@ async function searchPatients(req, res, next) {
     const offset = Number.isNaN(parsedOffset) ? 0 : Math.max(parsedOffset, 0);
     const keyword = String(search || q || "").trim();
 
-    const conditions = [
+    // Build parameters array for the base conditions
+    const baseParams = [];
+    const keywordLike = keyword ? `%${keyword}%` : null;
+
+    // Build the WHERE conditions as a proper array
+    const baseConditions = [
       "hdocord.docointkey IS NOT NULL",
       "hdocord.docointkey <> ''",
     ];
-    const params = [];
 
     // Direct hpercode lookup - fastest option
     if (hpercode) {
-      conditions.push("henctr.hpercode = ?");
-      params.push(hpercode);
+      baseConditions.push("henctr.hpercode = ?");
+      baseParams.push(hpercode);
     }
 
     if (fhud) {
-      conditions.push("henctr.fhud = ?");
-      params.push(fhud);
+      baseConditions.push("henctr.fhud = ?");
+      baseParams.push(fhud);
     }
 
     if (enccode) {
-      conditions.push("hdocord.enccode = ?");
-      params.push(enccode);
+      baseConditions.push("hdocord.enccode = ?");
+      baseParams.push(enccode);
     }
 
     if (docointkey) {
-      conditions.push("hdocord.docointkey = ?");
-      params.push(docointkey);
+      baseConditions.push("hdocord.docointkey = ?");
+      baseParams.push(docointkey);
     }
 
     if (keyword) {
-      conditions.push(
-        "(" +
-          "hdocord.enccode LIKE ? OR " +
-          "henctr.fhud LIKE ? OR " +
-          "hdocord.docointkey LIKE ? OR " +
-          "hperson.hpercode LIKE ? OR " +
-          "CONCAT_WS(' ', hperson.patfirst, hperson.patmiddle, hperson.patlast) LIKE ? OR " +
-          "CONCAT(hperson.patlast, ' ', hperson.patfirst) LIKE ?" +
-          ")",
+      baseConditions.push(
+        "(hdocord.enccode LIKE ? OR henctr.fhud LIKE ? OR hdocord.docointkey LIKE ? OR hperson.hpercode LIKE ? OR CONCAT_WS(' ', hperson.patfirst, hperson.patmiddle, hperson.patlast) LIKE ? OR CONCAT(hperson.patlast, ' ', hperson.patfirst) LIKE ?)"
       );
-      const like = `%${keyword}%`;
-      params.push(like, like, like, like, like, like);
+      // Add 6 LIKE parameters for keyword search
+      baseParams.push(keywordLike, keywordLike, keywordLike, keywordLike, keywordLike, keywordLike);
     }
 
     if (user) {
-      conditions.push("hdocord.entryby = ?");
-      params.push(user);
+      baseConditions.push("hdocord.entryby = ?");
+      baseParams.push(user);
     }
 
-    const whereClause = `WHERE ${conditions.join(" AND ")}`;
+    const baseWhere = baseConditions.join(" AND ");
 
-    // Base join for doctor orders
-    const baseJoin = `
+    // Count query - simple count of distinct patients
+    const countSql = `
+      SELECT COUNT(DISTINCT henctr.hpercode) AS total
       FROM hdocord
       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
       LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
-      ${whereClause}
+      WHERE ${baseWhere}
     `;
+    const [[{ total }]] = await pool.query(countSql, baseParams);
 
-    // Get distinct patient encounters
-    const docOrderQuery = `
-      SELECT
-        hdocord.docointkey,
-        hdocord.enccode,
-        henctr.hpercode,
-        MAX(hdocord.entryby) AS entryby
-      ${baseJoin}
-      GROUP BY hdocord.docointkey, hdocord.enccode, henctr.hpercode
-    `;
-
-    // Latest docointkey per patient
-    const latestPerPatientQuery = `
-      SELECT hpercode, MAX(docointkey) AS docointkey
-      FROM (${docOrderQuery}) doc_orders
-      GROUP BY hpercode
-    `;
-
-    // Latest enccode per patient+docointkey
-    const latestEncounterQuery = `
-      SELECT hpercode, docointkey, MAX(enccode) AS enccode
-      FROM (${docOrderQuery}) doc_orders
-      GROUP BY hpercode, docointkey
-    `;
-
-    // Count query
-    const countQuery = `
-      SELECT COUNT(*) AS total FROM (${latestPerPatientQuery}) patient_rows
-    `;
-    const [[{ total }]] = await pool.query(countQuery, params);
-
-    // Main query - essential fields only with simple JOINs
+    // Simpler query - get distinct patients with their latest order info
     const [rows] = await pool.query(
-      `SELECT
-        doc_orders.enccode,
+      `SELECT DISTINCT
+        henctr.enccode,
         henctr.fhud,
-        doc_orders.docointkey,
-        doc_orders.entryby AS user,
+        hdocord.docointkey,
+        hdocord.entryby AS user,
         hperson.hpercode,
         hperson.patlast,
         hperson.patfirst,
@@ -526,103 +494,15 @@ async function searchPatients(req, res, next) {
         hperson.patsex,
         hperson.patbdate,
         hperson.hfhudcode,
-        hperson.patbplace,
-        hperson.patcstat,
-        hperson.natcode,
-        hperson.relcode,
-        hperson.fatlast,
-        hperson.fatmid,
-        hperson.fatfirst,
-        CONCAT_WS(' ', hperson.fatlast, hperson.fatmid, hperson.fatfirst) AS fathers_name,
-        hperson.motlast,
-        hperson.motfirst,
-        hperson.motmid,
-        CONCAT_WS(' ', hperson.motlast, hperson.motfirst, hperson.motmid) AS mothers_name,
-        hperson.patempstat,
-        fh.hfhudname AS facility_name,
-        -- Address from grouped subquery
-        a.brg AS bgycode,
-        a.patstr,
-        a.ctycode,
-        a.provcode,
-        a.patzip,
-        b.bgyname,
-        c.ctyname,
-        pv.provname,
-        r.regname,
-        CONCAT_WS(', ', a.patstr, b.bgyname, c.ctyname, pv.provname, r.regname, a.patzip) AS patient_address,
-        -- Latest admission
-        latest_adm.casenum AS case_number,
-        latest_adm.patage AS age,
-        latest_adm.admdate AS admission_date,
-        latest_adm.disdate AS discharge_date,
-        latest_adm.admtxt AS chief_complaint,
-        latest_adm.admnotes AS admission_diagnosis,
-        latest_adm.disnotes AS discharge_diagnosis,
-        latest_adm.dispcode AS disposition,
-        latest_adm.condcode AS 'condition',
-        latest_adm.newold AS type_of_admission,
-        -- Vital signs
-        vs.vsbp AS blood_pressure,
-        vs.vstemp AS temperature,
-        vs.vspulse AS pulse,
-        vs.vsresp AS resp,
-        vs.o2sats,
-        vs.fetal_heart_rate,
-        vso.vsweight AS weight,
-        vso.vsheight AS height,
-        vso.vsbmi AS bmi,
-        vso.vsbmicat AS bmi_category,
-        -- Room info
-        room.rmname AS room_name,
-        bed.bdname AS bed_name,
-        ward.wardname AS ward_name,
-        -- Phone
-        tel.pattel AS telephone_number,
-        -- PHIC
-        phic.phicnum AS health_number,
-        -- ICD code
-        diag.diagcode AS icd_code
-      FROM (${docOrderQuery}) doc_orders
-      INNER JOIN (${latestPerPatientQuery}) latest
-        ON latest.hpercode = doc_orders.hpercode
-        AND latest.docointkey = doc_orders.docointkey
-      INNER JOIN (${latestEncounterQuery}) latest_enc
-        ON latest_enc.hpercode = doc_orders.hpercode
-        AND latest_enc.docointkey = doc_orders.docointkey
-        AND latest_enc.enccode = doc_orders.enccode
-      INNER JOIN henctr ON henctr.enccode = doc_orders.enccode
-      LEFT JOIN hperson ON hperson.hpercode = doc_orders.hpercode
-      -- Address
-      LEFT JOIN (
-        SELECT hpercode, MAX(brg) AS brg, MAX(patstr) AS patstr,
-               MAX(ctycode) AS ctycode, MAX(provcode) AS provcode, MAX(patzip) AS patzip
-        FROM haddr GROUP BY hpercode
-      ) a ON hperson.hpercode = a.hpercode
-      LEFT JOIN hbrgy b ON a.brg = b.bgycode
-      LEFT JOIN hcity c ON a.ctycode = c.ctycode
-      LEFT JOIN hprov pv ON a.provcode = pv.provcode
-      LEFT JOIN hregion r ON c.ctyreg = r.regcode
+        fh.hfhudname AS facility_name
+      FROM hdocord
+      INNER JOIN henctr ON henctr.enccode = hdocord.enccode
+      LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
       LEFT JOIN fhud_hospital fh ON hperson.hfhudcode = fh.hfhudcode
-      -- Latest admission
-      LEFT JOIN hadmlog latest_adm ON latest_adm.hpercode = hperson.hpercode
-      -- Vital signs
-      LEFT JOIN hvitalsign vs ON vs.hpercode = hperson.hpercode
-      LEFT JOIN hvsothr vso ON vso.hpercode = hperson.hpercode
-      -- Room/ward
-      LEFT JOIN hpatroom pr ON pr.hpercode = hperson.hpercode
-      LEFT JOIN hroom room ON pr.rmintkey = room.rmintkey
-      LEFT JOIN hbed bed ON pr.bdintkey = bed.bdintkey
-      LEFT JOIN hward ward ON pr.wardcode = ward.wardcode
-      -- Phone
-      LEFT JOIN htelep tel ON tel.hpercode = hperson.hpercode
-      -- PHIC
-      LEFT JOIN hphiclog phic ON phic.hpercode = hperson.hpercode
-      -- ICD
-      LEFT JOIN hencdiag diag ON diag.enccode = doc_orders.enccode
+      WHERE ${baseWhere}
       ORDER BY hperson.patlast, hperson.patfirst, hperson.hpercode
       LIMIT ? OFFSET ?`,
-      [...params, limit, offset],
+      [...baseParams, limit, offset],
     );
 
     const data = rows.map((row) => ({
