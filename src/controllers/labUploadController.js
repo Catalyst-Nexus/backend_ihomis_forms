@@ -462,21 +462,6 @@ async function debugSampleData(req, res, next) {
        LIMIT 20`
     );
 
-    // Check procode values in pcchrgcod (if exists)
-    let procodeRows = [];
-    try {
-      [procodeRows] = await pool.query(
-        `SELECT DISTINCT procode, COUNT(*) as count 
-         FROM pcchrgcod 
-         WHERE procode IS NOT NULL AND procode != '' 
-         GROUP BY procode 
-         ORDER BY count DESC 
-         LIMIT 20`
-      );
-    } catch (pcError) {
-      procodeRows = [{ error: pcError.message }];
-    }
-
     // Get sample hdocord rows with orcode
     const [sampleHdocord] = await pool.query(
       `SELECT enccode, docointkey, orcode, dodate, estatus 
@@ -485,11 +470,48 @@ async function debugSampleData(req, res, next) {
        LIMIT 10`
     );
 
+    // List all tables to find one with procode
+    const [allTables] = await pool.query(
+      `SELECT TABLE_NAME 
+       FROM INFORMATION_SCHEMA.TABLES 
+       WHERE TABLE_SCHEMA = DATABASE() 
+       ORDER BY TABLE_NAME`
+    );
+
+    // Search for procode in all tables
+    const tablesWithProcode = [];
+    for (const { TABLE_NAME } of allTables) {
+      const [columns] = await pool.query(
+        `SELECT COLUMN_NAME 
+         FROM INFORMATION_SCHEMA.COLUMNS 
+         WHERE TABLE_SCHEMA = DATABASE() 
+         AND TABLE_NAME = ? 
+         AND COLUMN_NAME LIKE '%proc%'`,
+        [TABLE_NAME]
+      );
+      if (columns.length > 0) {
+        tablesWithProcode.push({
+          table: TABLE_NAME,
+          columns: columns.map(c => c.COLUMN_NAME)
+        });
+      }
+    }
+
+    // Also check for 'lib' tables (common for lab items)
+    const [libTables] = await pool.query(
+      `SELECT TABLE_NAME 
+       FROM INFORMATION_SCHEMA.TABLES 
+       WHERE TABLE_SCHEMA = DATABASE() 
+       AND (TABLE_NAME LIKE '%lib%' OR TABLE_NAME LIKE '%cat%' OR TABLE_NAME LIKE '%hdl%')
+       ORDER BY TABLE_NAME`
+    );
+
     res.json({
       ok: true,
       orcodeSummary: orcodeRows,
-      procodeSummary: procodeRows,
       sampleHdocord: sampleHdocord,
+      tablesWithProcColumns: tablesWithProcode,
+      libLikeTables: libTables.map(t => t.TABLE_NAME),
     });
   } catch (error) {
     return next(error);
