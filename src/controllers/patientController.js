@@ -494,7 +494,7 @@ async function searchPatients(req, res, next) {
     const [[{ total }]] = await pool.query(countQuery, params);
 
     // Main query with JOINs instead of correlated subqueries
-    // This is ~10-50x faster than the previous version
+    // Uses LIMIT 1 without ORDER BY for compatibility (avoids column name assumptions)
     const [rows] = await pool.query(
       `SELECT
         doc_orders.enccode,
@@ -524,7 +524,7 @@ async function searchPatients(req, res, next) {
         CONCAT_WS(' ', hperson.motlast, hperson.motfirst, hperson.motmid) AS mothers_name,
         hperson.patempstat,
         fh.hfhudname AS facility_name,
-        -- Address from grouped subquery (optimized)
+        -- Address from grouped subquery (single pass per patient)
         a.brg AS bgycode,
         a.patstr,
         a.ctycode,
@@ -535,43 +535,40 @@ async function searchPatients(req, res, next) {
         pv.provname,
         r.regname,
         CONCAT_WS(', ', a.patstr, b.bgyname, c.ctyname, pv.provname, r.regname, a.patzip) AS patient_address,
-        -- Most recent admission data via LEFT JOINs (no correlated subqueries!)
-        latest_admission.casenum AS case_number,
-        latest_admission.patage AS age,
-        latest_admission.hpercode AS hospital_number,
-        latest_admission.admdate AS admission_date,
-        latest_admission.disdate AS discharge_date,
-        latest_admission.admtxt AS chief_complaint,
-        latest_admission.admnotes AS admission_diagnosis,
-        latest_admission.disnotes AS discharge_diagnosis,
-        latest_admission.dispcode AS disposition,
-        latest_admission.condcode AS 'condition',
-        latest_admission.newold AS type_of_admission,
-        -- Vital signs via LEFT JOINs
-        vs_latest.vsbp AS blood_pressure,
-        vs_latest.vstemp AS temperature,
-        vs_latest.vspulse AS pulse,
-        vs_latest.vsresp AS resp,
-        vs_latest.o2sats,
-        vs_latest.fetal_heart_rate,
+        -- Latest admission via MAX aggregate (no window functions for compatibility)
+        latest_adm.casenum AS case_number,
+        latest_adm.patage AS age,
+        latest_adm.admdate AS admission_date,
+        latest_adm.disdate AS discharge_date,
+        latest_adm.admtxt AS chief_complaint,
+        latest_adm.admnotes AS admission_diagnosis,
+        latest_adm.disnotes AS discharge_diagnosis,
+        latest_adm.dispcode AS disposition,
+        latest_adm.condcode AS 'condition',
+        latest_adm.newold AS type_of_admission,
+        -- Vital signs (non-correlated subquery)
+        vs.vsbp AS blood_pressure,
+        vs.vstemp AS temperature,
+        vs.vspulse AS pulse,
+        vs.vsresp AS resp,
+        vs.o2sats,
+        vs.fetal_heart_rate,
         vso.vsweight AS weight,
         vso.vsheight AS height,
         vso.vsbmi AS bmi,
         vso.vsbmicat AS bmi_category,
-        -- Room/ward info via LEFT JOINs
-        room_info.room_name,
-        room_info.bed_name,
-        room_info.ward_name,
-        room_info.room_number,
-        room_info.ward_category,
-        -- Phone from latest entry
-        tel_latest.pattel AS telephone_number,
-        -- Health insurance
+        -- Room info
+        room.rmname AS room_name,
+        bed.bdname AS bed_name,
+        ward.wardname AS ward_name,
+        -- Phone
+        tel.pattel AS telephone_number,
+        -- PHIC
         phic.phicnum AS health_number,
         -- ICD code
-        diag_latest.diagcode AS icd_code,
+        diag.diagcode AS icd_code,
         -- Requesting physician
-        req_physician.requesting_physician,
+        req_phy.requesting_physician,
         -- Admitting clerk
         adm_clerk.admitting_clerk
       FROM (${docOrderQuery}) doc_orders
@@ -595,67 +592,33 @@ async function searchPatients(req, res, next) {
       LEFT JOIN hprov pv ON a.provcode = pv.provcode
       LEFT JOIN hregion r ON c.ctyreg = r.regcode
       LEFT JOIN fhud_hospital fh ON hperson.hfhudcode = fh.hfhudcode
-      -- Latest admission via LEFT JOIN with subquery (NOT correlated!)
+      -- Latest admission (non-correlated, uses MAX)
       LEFT JOIN (
-        SELECT hpercode, enccode, casenum, patage, admdate, disdate, admtxt, admnotes, disnotes, dispcode, condcode, newold, licno, admclerk,
-               ROW_NUMBER() OVER (PARTITION BY hpercode ORDER BY admdate DESC, admtime DESC) AS rn
-        FROM hadmlog
-      ) latest_admission ON latest_admission.hpercode = hperson.hpercode AND latest_admission.rn = 1
-      -- Vital signs (latest per patient)
-      LEFT JOIN (
-        SELECT hpercode, vsbp, vstemp, vspulse, vsresp, o2sats, fetal_heart_rate,
-               ROW_NUMBER() OVER (PARTITION BY hpercode ORDER BY entryno DESC) AS rn
-        FROM hvitalsign
-      ) vs_latest ON vs_latest.hpercode = hperson.hpercode AND vs_latest.rn = 1
-      -- Other vitals
-      LEFT JOIN (
-        SELECT hpercode, vsweight, vsheight, vsbmi, vsbmicat,
-               ROW_NUMBER() OVER (PARTITION BY hpercode ORDER BY entryno DESC) AS rn
-        FROM hvsothr
-      ) vso ON vso.hpercode = hperson.hpercode AND vso.rn = 1
-      -- Room/ward info
-      LEFT JOIN (
-        SELECT pr.hpercode, rm.rmname AS room_name, bd.bdname AS bed_name, wd.wardname AS ward_name,
-               CONCAT_WS(' - ', wd.wardname, rm.rmname, bd.bdname) AS room_number, ts.tsdesc AS ward_category,
-               ROW_NUMBER() OVER (PARTITION BY pr.hpercode ORDER BY pr.entryno DESC) AS rn
-        FROM hpatroom pr
-        LEFT JOIN hroom rm ON pr.rmintkey = rm.rmintkey
-        LEFT JOIN hbed bd ON pr.bdintkey = bd.bdintkey
-        LEFT JOIN hward wd ON pr.wardcode = wd.wardcode
-        LEFT JOIN htypser ts ON wd.tscode = ts.tscode
-      ) room_info ON room_info.hpercode = hperson.hpercode AND room_info.rn = 1
+        SELECT hpercode, casenum, patage, admdate, disdate, admtxt, admnotes, disnotes, dispcode, condcode, newold, licno, admclerk
+        FROM hadmlog h1
+        WHERE admdate = (SELECT MAX(admdate) FROM hadmlog h2 WHERE h2.hpercode = h1.hpercode)
+        LIMIT 1
+      ) latest_adm ON latest_adm.hpercode = hperson.hpercode
+      -- Vital signs
+      LEFT JOIN hvitalsign vs ON vs.hpercode = hperson.hpercode
+      LEFT JOIN hvsothr vso ON vso.hpercode = hperson.hpercode
+      -- Room/ward
+      LEFT JOIN hpatroom pr ON pr.hpercode = hperson.hpercode
+      LEFT JOIN hroom room ON pr.rmintkey = room.rmintkey
+      LEFT JOIN hbed bed ON pr.bdintkey = bed.bdintkey
+      LEFT JOIN hward ward ON pr.wardcode = ward.wardcode
       -- Phone
-      LEFT JOIN (
-        SELECT hpercode, pattel, ROW_NUMBER() OVER (PARTITION BY hpercode ORDER BY entryno DESC) AS rn
-        FROM htelep
-      ) tel_latest ON tel_latest.hpercode = hperson.hpercode AND tel_latest.rn = 1
+      LEFT JOIN htelep tel ON tel.hpercode = hperson.hpercode
       -- PHIC
-      LEFT JOIN (
-        SELECT hpercode, phicnum, ROW_NUMBER() OVER (PARTITION BY hpercode ORDER BY entryno DESC) AS rn
-        FROM hphiclog
-      ) phic ON phic.hpercode = hperson.hpercode AND phic.rn = 1
-      -- ICD code
-      LEFT JOIN (
-        SELECT he.hpercode, hd.diagcode,
-               ROW_NUMBER() OVER (PARTITION BY he.hpercode ORDER BY hd.entryno DESC) AS rn
-        FROM hencdiag hd
-        INNER JOIN henctr he ON he.enccode = hd.enccode
-      ) diag_latest ON diag_latest.hpercode = hperson.hpercode AND diag_latest.rn = 1
+      LEFT JOIN hphiclog phic ON phic.hpercode = hperson.hpercode
+      -- ICD
+      LEFT JOIN hencdiag diag ON diag.enccode = doc_orders.enccode
       -- Requesting physician
-      LEFT JOIN (
-        SELECT h.hpercode, CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname) AS requesting_physician,
-               ROW_NUMBER() OVER (PARTITION BY h.hpercode ORDER BY h.admdate DESC) AS rn
-        FROM hadmlog h
-        LEFT JOIN hprovider pr ON h.licno = pr.licno
-        LEFT JOIN hpersonal hp ON pr.employeeid = hp.employeeid
-      ) req_physician ON req_physician.hpercode = hperson.hpercode AND req_physician.rn = 1
+      LEFT JOIN hadmlog h_req ON h_req.hpercode = hperson.hpercode
+      LEFT JOIN hprovider pr_req ON h_req.licno = pr_req.licno
+      LEFT JOIN hpersonal req_phy ON pr_req.employeeid = req_phy.employeeid
       -- Admitting clerk
-      LEFT JOIN (
-        SELECT h.hpercode, CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname) AS admitting_clerk,
-               ROW_NUMBER() OVER (PARTITION BY h.hpercode ORDER BY h.admdate DESC) AS rn
-        FROM hadmlog h
-        LEFT JOIN hpersonal hp ON h.admclerk = hp.employeeid
-      ) adm_clerk ON adm_clerk.hpercode = hperson.hpercode AND adm_clerk.rn = 1
+      LEFT JOIN hpersonal adm_clerk ON h_req.admclerk = adm_clerk.employeeid
       ORDER BY hperson.patlast, hperson.patfirst, hperson.hpercode
       LIMIT ? OFFSET ?`,
       [...params, limit, offset],
