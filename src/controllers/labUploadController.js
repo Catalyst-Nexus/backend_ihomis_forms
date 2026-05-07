@@ -158,18 +158,20 @@ async function getOrdersForEncounter(req, res, next) {
 }
 
 /**
- * GET /api/db/encounters/:enccode/orders/:orcode/procedures
+ * GET /api/db/encounters/:enccode/orders/:docointkey/procedures
  * Fetch procedures (line items) for a specific order from MySQL.
  * Returns empty array if pcchrgcod table doesn't exist or has different schema.
+ * 
+ * Note: pcchrgcod.orcode references hdocord.docointkey
  */
 async function getProceduresForOrder(req, res, next) {
   try {
-    const { enccode, orcode } = req.params;
+    const { enccode, docointkey } = req.params;
 
-    if (!enccode || !orcode) {
+    if (!enccode || !docointkey) {
       return res.status(400).json({
         ok: false,
-        message: "enccode and orcode are required",
+        message: "enccode and docointkey are required",
       });
     }
 
@@ -178,18 +180,18 @@ async function getProceduresForOrder(req, res, next) {
     try {
       const [procRows] = await pool.query(
         `SELECT * FROM pcchrgcod WHERE enccode = ? AND orcode = ? LIMIT 50`,
-        [enccode, orcode],
+        [enccode, docointkey],
       );
       rows = procRows;
     } catch (pcError) {
-      // pcchrgcod table might not exist or have different schema
+      // pcchrgcod table might not exist or has different schema
       console.warn("pcchrgcod query failed:", pcError.message);
     }
 
     return res.json({
       ok: true,
       enccode,
-      orcode,
+      docointkey,
       count: rows.length,
       data: rows,
     });

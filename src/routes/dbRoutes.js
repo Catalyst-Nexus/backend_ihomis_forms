@@ -119,10 +119,10 @@ router.get("/users/:userId", getUserById);
 // Fetch lab/radiology orders for an encounter
 router.get("/encounters/:enccode/orders", getOrdersForEncounter);
 
-// GET /api/db/encounters/:enccode/orders/:orcode/procedures
+// GET /api/db/encounters/:enccode/orders/:docointkey/procedures
 // Fetch procedures (line items) for a specific order
 router.get(
-  "/encounters/:enccode/orders/:orcode/procedures",
+  "/encounters/:enccode/orders/:docointkey/procedures",
   getProceduresForOrder,
 );
 
