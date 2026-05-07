@@ -506,12 +506,39 @@ async function debugSampleData(req, res, next) {
        ORDER BY TABLE_NAME`
     );
 
+    // Get proccode values from hdocord
+    const [proccodeInHdocord] = await pool.query(
+      `SELECT DISTINCT proccode, COUNT(*) as count 
+       FROM hdocord 
+       WHERE proccode IS NOT NULL AND proccode != '' 
+       GROUP BY proccode 
+       ORDER BY count DESC 
+       LIMIT 20`
+    );
+
+    // Get procedure master list with descriptions
+    const [procedureMaster] = await pool.query(
+      `SELECT proccode, procdesc, procstat 
+       FROM hprocm 
+       WHERE proccode IS NOT NULL AND proccode != '' 
+       ORDER BY procdesc 
+       LIMIT 30`
+    );
+
+    // Get lab result library
+    const [labResultLib] = await pool.query(
+      `SELECT * FROM labresultlibrary LIMIT 20`
+    );
+
     res.json({
       ok: true,
       orcodeSummary: orcodeRows,
       sampleHdocord: sampleHdocord,
       tablesWithProcColumns: tablesWithProcode,
       libLikeTables: libTables.map(t => t.TABLE_NAME),
+      proccodeInHdocord: proccodeInHdocord,
+      procedureMaster: procedureMaster,
+      labResultLibrary: labResultLib,
     });
   } catch (error) {
     return next(error);
