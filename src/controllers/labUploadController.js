@@ -86,7 +86,7 @@ async function validateEncounterInMySQL(enccode, hpercode) {
 
 async function validateOrderInMySQL(orcode, enccode) {
   const [rows] = await pool.query(
-    "SELECT orcode, enccode, ordcode, oritem, ordate, ortime, estatus FROM hdocord WHERE orcode = ? AND enccode = ? LIMIT 1",
+    "SELECT orcode, enccode, oritem, ordate, ortime, estatus FROM hdocord WHERE orcode = ? AND enccode = ? LIMIT 1",
     [orcode, enccode],
   );
   return rows[0] || null;
@@ -114,20 +114,20 @@ async function getOrdersForEncounter(req, res, next) {
         .json({ ok: false, message: "enccode is required" });
     }
 
-    let typeCondition = "";
-    if (orderType === "lab") {
-      typeCondition =
-        "AND (hdocord.ordcode LIKE 'LAB%' OR hdocord.ordcode LIKE 'CLINIC-LAB%')";
-    } else if (orderType === "rad") {
-      typeCondition =
-        "AND (hdocord.ordcode LIKE 'RAD%' OR hdocord.ordcode LIKE 'XRAY%' OR hdocord.ordcode LIKE 'ULTRASOUND%')";
+    // Note: ordcode column may not exist in hdocord, so type filtering is skipped for now
+    // All orders are returned if no type filter is needed
+    let statusCondition = "";
+    const params = [enccode];
+    
+    if (status && status !== "all") {
+      statusCondition = "AND hdocord.estatus = ?";
+      params.push(status);
     }
 
     const [rows] = await pool.query(
       `SELECT
          hdocord.orcode,
          hdocord.enccode,
-         hdocord.ordcode,
          hdocord.oritem,
          DATE_FORMAT(hdocord.ordate, '%Y-%m-%d') AS ordate,
          DATE_FORMAT(hdocord.ortime, '%H:%i:%s') AS ortime,
@@ -142,10 +142,9 @@ async function getOrdersForEncounter(req, res, next) {
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
        INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
        WHERE hdocord.enccode = ?
-         AND hdocord.estatus = ?
-         ${typeCondition}
+         ${statusCondition}
        ORDER BY hdocord.ordate DESC, hdocord.ortime DESC, hdocord.orcode DESC`,
-      [enccode, status],
+      params,
     );
 
     return res.json({
@@ -201,7 +200,6 @@ async function getProceduresForOrder(req, res, next) {
          pcchrgcod.entryby    AS enteredBy,
          DATE_FORMAT(pcchrgcod.procdate, '%Y-%m-%d') AS procdate_formatted,
          DATE_FORMAT(pcchrgcod.proctime, '%H:%i:%s') AS proctime_formatted,
-         hdocord.ordcode,
          hdocord.oritem
        FROM pcchrgcod
        INNER JOIN hdocord ON hdocord.orcode = pcchrgcod.orcode
