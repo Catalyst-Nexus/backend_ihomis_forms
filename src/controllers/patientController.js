@@ -468,7 +468,7 @@ async function searchPatients(req, res, next) {
 
     const baseWhere = baseConditions.join(" AND ");
 
-    // Count query - simple count of distinct patients
+    // Count query - count distinct patients first
     const countSql = `
       SELECT COUNT(DISTINCT henctr.hpercode) AS total
       FROM hdocord
@@ -478,9 +478,41 @@ async function searchPatients(req, res, next) {
     `;
     const [[{ total }]] = await pool.query(countSql, baseParams);
 
-    // Simpler query - get distinct patients with their latest order info
+    // Get distinct patient hpercodes first (for consistent pagination)
+    const patientIdsSql = `
+      SELECT DISTINCT henctr.hpercode
+      FROM hdocord
+      INNER JOIN henctr ON henctr.enccode = hdocord.enccode
+      LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
+      WHERE ${baseWhere}
+      ORDER BY hperson.patlast, hperson.patfirst, henctr.hpercode
+      LIMIT ? OFFSET ?
+    `;
+    const [patientIds] = await pool.query(patientIdsSql, [...baseParams, limit, offset]);
+
+    // If no patients found, return empty
+    if (patientIds.length === 0) {
+      return res.json({
+        ok: true,
+        count: 0,
+        pagination: { limit, offset, total },
+        filters: {
+          search: keyword || null,
+          user: user || null,
+          fhud: fhud || null,
+          enccode: enccode || null,
+          docointkey: docointkey || null,
+        },
+        data: [],
+      });
+    }
+
+    // Get patient details with their latest order info using the filtered hpercodes
+    const hpercodes = patientIds.map((r) => r.hpercode);
+    const placeholders = hpercodes.map(() => "?").join(",");
+    
     const [rows] = await pool.query(
-      `SELECT DISTINCT
+      `SELECT
         henctr.enccode,
         henctr.fhud,
         hdocord.docointkey,
@@ -499,10 +531,10 @@ async function searchPatients(req, res, next) {
       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
       LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
       LEFT JOIN fhud_hospital fh ON hperson.hfhudcode = fh.hfhudcode
-      WHERE ${baseWhere}
-      ORDER BY hperson.patlast, hperson.patfirst, hperson.hpercode
-      LIMIT ? OFFSET ?`,
-      [...baseParams, limit, offset],
+      WHERE henctr.hpercode IN (${placeholders})
+      GROUP BY hperson.hpercode
+      ORDER BY hperson.patlast, hperson.patfirst, hperson.hpercode`,
+      hpercodes,
     );
 
     const data = rows.map((row) => ({
