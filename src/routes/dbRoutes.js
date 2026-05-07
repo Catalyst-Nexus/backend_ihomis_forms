@@ -90,6 +90,7 @@ router.get(
 );
 
 // Lab upload flow - patient encounters list (for modal selection)
+// NOTE: This route MUST come before /patients/history/:hpercode to avoid route conflict
 router.get("/patients/:hpercode/encounters", getEncountersForPatient);
 
 // Form routes
