@@ -511,16 +511,17 @@ async function searchPatients(req, res, next) {
       });
     }
 
-    // Get patient details with their latest order info using the filtered hpercodes
+    // Get patient details using the filtered hpercodes
     const hpercodes = patientIds.map((r) => r.hpercode);
     const placeholders = hpercodes.map(() => "?").join(",");
     
+    // Use proper GROUP BY with all non-aggregated columns for only_full_group_by compatibility
     const [rows] = await pool.query(
       `SELECT
-        henctr.enccode,
-        henctr.fhud,
-        hdocord.docointkey,
-        hdocord.entryby AS user,
+        MAX(henctr.enccode) AS enccode,
+        MAX(henctr.fhud) AS fhud,
+        MAX(hdocord.docointkey) AS docointkey,
+        MAX(hdocord.entryby) AS user,
         hperson.hpercode,
         hperson.patlast,
         hperson.patfirst,
@@ -530,13 +531,13 @@ async function searchPatients(req, res, next) {
         hperson.patsex,
         hperson.patbdate,
         hperson.hfhudcode,
-        fh.hfhudname AS facility_name
+        MAX(fh.hfhudname) AS facility_name
       FROM hdocord
       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
       LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
       LEFT JOIN fhud_hospital fh ON hperson.hfhudcode = fh.hfhudcode
       WHERE henctr.hpercode IN (${placeholders})
-      GROUP BY hperson.hpercode
+      GROUP BY hperson.hpercode, hperson.patlast, hperson.patfirst, hperson.patmiddle, hperson.patsuffix, hperson.patsex, hperson.patbdate, hperson.hfhudcode
       ORDER BY hperson.patlast, hperson.patfirst, hperson.hpercode`,
       hpercodes,
     );
