@@ -116,66 +116,190 @@ async function getOrdersForEncounter(req, res, next) {
     const { enccode } = req.params;
     const orderType = req.query.type || "all";
     const status = req.query.status || "S";
+    const hpercode = req.query.hpercode || null; // Optional: query by hpercode instead
 
-    if (!enccode) {
+    if (!enccode && !hpercode) {
       return res
         .status(400)
-        .json({ ok: false, message: "enccode is required" });
+        .json({ ok: false, message: "enccode or hpercode is required" });
     }
+
+    console.log(`[getOrdersForEncounter] enccode: "${enccode}", hpercode: "${hpercode}", type: ${orderType}, status: ${status}`);
 
     // Build type filter based on orcode column
     // LABOR = Lab, RADIO = Radiology
     let typeCondition = "";
     if (orderType === "lab") {
-      typeCondition = "AND hdocord.orcode = 'LABOR'";
+      typeCondition = "AND (hdocord.orcode = 'LABOR' OR hdocord.orcode LIKE 'LAB%' OR hdocord.orcode LIKE 'L%')";
     } else if (orderType === "rad") {
-      typeCondition = "AND hdocord.orcode = 'RADIO'";
+      typeCondition = "AND (hdocord.orcode = 'RADIO' OR hdocord.orcode LIKE 'RAD%' OR hdocord.orcode LIKE 'XRAY%')";
     }
     // 'all' returns all orders without type filter
 
     let statusCondition = "";
-    const params = [enccode];
     
-    if (status && status !== "all") {
-      statusCondition = "AND hdocord.estatus = ?";
-      params.push(status);
+    // Determine query approach: by enccode or by hpercode
+    let queryByEncounter = false;
+    let queryByPatient = false;
+    
+    if (enccode) {
+      // First try by enccode
+      const [checkByEnc] = await pool.query(
+        `SELECT COUNT(*) as total FROM hdocord WHERE enccode = ?`,
+        [enccode]
+      );
+      console.log(`[getOrdersForEncounter] hdocord records for enccode "${enccode}": ${checkByEnc[0]?.total}`);
+      
+      if (checkByEnc[0]?.total > 0) {
+        queryByEncounter = true;
+      }
+    }
+    
+    // If no records by enccode, try by hpercode
+    if (!queryByEncounter && hpercode) {
+      // Get hpercode from henctr if not provided
+      let resolvedHpercode = hpercode;
+      if (enccode) {
+        const [encRows] = await pool.query(
+          `SELECT hpercode FROM henctr WHERE enccode = ? LIMIT 1`,
+          [enccode]
+        );
+        if (encRows[0]?.hpercode) {
+          resolvedHpercode = encRows[0].hpercode;
+        }
+      }
+      
+      if (resolvedHpercode) {
+        const [checkByPat] = await pool.query(
+          `SELECT COUNT(*) as total FROM hdocord 
+           INNER JOIN henctr ON henctr.enccode = hdocord.enccode
+           WHERE henctr.hpercode = ?`,
+          [resolvedHpercode]
+        );
+        console.log(`[getOrdersForEncounter] hdocord records for hpercode "${resolvedHpercode}": ${checkByPat[0]?.total}`);
+        
+        if (checkByPat[0]?.total > 0) {
+          queryByPatient = true;
+        }
+      }
+    }
+    
+    let rows = [];
+    const baseSelect = `
+      SELECT
+        hdocord.enccode,
+        hdocord.docointkey,
+        hdocord.orcode,
+        hdocord.proccode,
+        hdocord.entryby,
+        DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS ordate,
+        DATE_FORMAT(hdocord.dotime, '%H:%i:%s') AS ortime,
+        hdocord.estatus,
+        henctr.hpercode,
+        hperson.patlast,
+        hperson.patfirst,
+        hperson.patmiddle,
+        hprocm.procdesc AS procedureDescription
+    `;
+    
+    if (queryByEncounter) {
+      // Query by enccode
+      const params = [enccode];
+      if (status && status !== "all") {
+        statusCondition = "AND hdocord.estatus = ?";
+        params.push(status);
+      }
+      
+      [rows] = await pool.query(
+        `${baseSelect}
+         FROM hdocord
+         INNER JOIN henctr ON henctr.enccode = hdocord.enccode
+         INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
+         LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
+         WHERE hdocord.enccode = ?
+         ${typeCondition}
+         ${statusCondition}
+         ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC
+         LIMIT 100`,
+        params
+      );
+    } else if (queryByPatient) {
+      // Query by hpercode - get all encounters for this patient
+      let resolvedHpercode = hpercode;
+      if (enccode) {
+        const [encRows] = await pool.query(
+          `SELECT hpercode FROM henctr WHERE enccode = ? LIMIT 1`,
+          [enccode]
+        );
+        if (encRows[0]?.hpercode) {
+          resolvedHpercode = encRows[0].hpercode;
+        }
+      }
+      
+      if (resolvedHpercode) {
+        const params = [resolvedHpercode];
+        if (status && status !== "all") {
+          statusCondition = "AND hdocord.estatus = ?";
+          params.push(status);
+        }
+        
+        [rows] = await pool.query(
+          `${baseSelect}
+           FROM hdocord
+           INNER JOIN henctr ON henctr.enccode = hdocord.enccode
+           INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
+           LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
+           WHERE henctr.hpercode = ?
+           ${typeCondition}
+           ${statusCondition}
+           ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC
+           LIMIT 100`,
+          params
+        );
+      }
+    } else {
+      // No records found - return empty with debug info
+      console.log(`[getOrdersForEncounter] No hdocord records found for enccode: "${enccode}"`);
+      
+      // Check if encounter exists at all
+      if (enccode) {
+        const [encExists] = await pool.query(
+          `SELECT enccode, hpercode FROM henctr WHERE enccode = ? LIMIT 1`,
+          [enccode]
+        );
+        if (encExists[0]) {
+          console.log(`[getOrdersForEncounter] Encounter exists in henctr with hpercode: "${encExists[0].hpercode}"`);
+          
+          // Check if this hpercode has ANY hdocord records
+          const [patOrders] = await pool.query(
+            `SELECT COUNT(*) as total FROM hdocord 
+             INNER JOIN henctr ON henctr.enccode = hdocord.enccode
+             WHERE henctr.hpercode = ?`,
+            [encExists[0].hpercode]
+          );
+          console.log(`[getOrdersForEncounter] Patient has ${patOrders[0]?.total} total hdocord records`);
+        }
+      }
     }
 
-    const [rows] = await pool.query(
-      `SELECT
-         hdocord.enccode,
-         hdocord.docointkey,
-         hdocord.orcode,
-         hdocord.proccode,
-         hdocord.entryby,
-         DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS ordate,
-         DATE_FORMAT(hdocord.dotime, '%H:%i:%s') AS ortime,
-         hdocord.estatus,
-         henctr.hpercode,
-         hperson.patlast,
-         hperson.patfirst,
-         hperson.patmiddle,
-         hprocm.procdesc AS procedureDescription
-       FROM hdocord
-       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
-       INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
-       LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
-       WHERE hdocord.enccode = ?
-       ${typeCondition}
-       ${statusCondition}
-       ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC
-       LIMIT 100`,
-      params,
-    );
+    console.log(`[getOrdersForEncounter] Found ${rows.length} orders`);
 
     return res.json({
       ok: true,
-      enccode,
+      enccode: enccode || null,
+      hpercode: hpercode || null,
       orderType,
       count: rows.length,
       data: rows,
+      _debug: {
+        queryByEncounter,
+        queryByPatient,
+        enccodeLength: enccode ? enccode.length : 0,
+        hpercodeLength: hpercode ? hpercode.length : 0,
+      }
     });
   } catch (error) {
+    console.error(`[getOrdersForEncounter] Error:`, error);
     return next(error);
   }
 }

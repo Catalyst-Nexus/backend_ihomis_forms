@@ -15,18 +15,27 @@ async function getPatientList(req, res, next) {
     );
     const offset = (page - 1) * limit;
 
-    const name = String(req.query.name || "").trim();
+    // Support multiple search param names: name, search, q
+    const name = String(req.query.name || req.query.search || req.query.q || "").trim();
+    const hpercode = String(req.query.hpercode || "").trim();
     const facility = String(req.query.facility || "").trim();
 
     const conditions = [];
     const params = [];
 
+    // Direct hpercode search (fastest)
+    if (hpercode) {
+      conditions.push("p.hpercode = ?");
+      params.push(hpercode);
+    }
+
+    // Name/fuzzy search
     if (name) {
       const searchTerm = `%${name}%`;
       conditions.push(
-        "(p.patlast LIKE ? OR p.patfirst LIKE ? OR p.patmiddle LIKE ? OR p.hpercode LIKE ?)",
+        "(p.patlast LIKE ? OR p.patfirst LIKE ? OR p.patmiddle LIKE ? OR p.hpercode LIKE ? OR CONCAT(p.patlast, ' ', p.patfirst) LIKE ?)",
       );
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (facility) {
@@ -404,7 +413,7 @@ async function getPatientHistory(req, res, next) {
  */
 async function searchPatients(req, res, next) {
   try {
-    const { search, q, user, fhud, enccode, docointkey } = req.query;
+    const { search, q, user, fhud, enccode, docointkey, hpercode } = req.query;
     const parsedLimit = Number.parseInt(req.query.limit, 10);
     const parsedOffset = Number.parseInt(req.query.offset, 10);
     const limit = Number.isNaN(parsedLimit)
@@ -418,6 +427,12 @@ async function searchPatients(req, res, next) {
       "hdocord.docointkey <> ''",
     ];
     const params = [];
+
+    // Direct hpercode lookup - fastest option
+    if (hpercode) {
+      conditions.push("henctr.hpercode = ?");
+      params.push(hpercode);
+    }
 
     if (fhud) {
       conditions.push("henctr.fhud = ?");
@@ -440,11 +455,13 @@ async function searchPatients(req, res, next) {
           "hdocord.enccode LIKE ? OR " +
           "henctr.fhud LIKE ? OR " +
           "hdocord.docointkey LIKE ? OR " +
-          "CONCAT_WS(' ', hperson.patfirst, hperson.patmiddle, hperson.patlast) LIKE ?" +
+          "hperson.hpercode LIKE ? OR " +
+          "CONCAT_WS(' ', hperson.patfirst, hperson.patmiddle, hperson.patlast) LIKE ? OR " +
+          "CONCAT(hperson.patlast, ' ', hperson.patfirst) LIKE ?" +
           ")",
       );
       const like = `%${keyword}%`;
-      params.push(like, like, like, like);
+      params.push(like, like, like, like, like, like);
     }
 
     if (user) {
