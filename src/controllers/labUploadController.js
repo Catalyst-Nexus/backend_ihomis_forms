@@ -84,10 +84,10 @@ async function validateEncounterInMySQL(enccode, hpercode) {
   return rows[0] || null;
 }
 
-async function validateOrderInMySQL(orcode, enccode) {
+async function validateOrderInMySQL(docointkey, enccode) {
   const [rows] = await pool.query(
-    "SELECT orcode, enccode, oritem, ordate, ortime, estatus FROM hdocord WHERE orcode = ? AND enccode = ? LIMIT 1",
-    [orcode, enccode],
+    "SELECT enccode, docointkey, entryby FROM hdocord WHERE docointkey = ? AND enccode = ? LIMIT 1",
+    [docointkey, enccode],
   );
   return rows[0] || null;
 }
@@ -126,14 +126,12 @@ async function getOrdersForEncounter(req, res, next) {
 
     const [rows] = await pool.query(
       `SELECT
-         hdocord.orcode,
          hdocord.enccode,
-         hdocord.oritem,
-         DATE_FORMAT(hdocord.ordate, '%Y-%m-%d') AS ordate,
-         DATE_FORMAT(hdocord.ortime, '%H:%i:%s') AS ortime,
-         hdocord.estatus,
-         hdocord.entryby,
          hdocord.docointkey,
+         hdocord.entryby,
+         DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS ordate,
+         DATE_FORMAT(hdocord.dotime, '%H:%i:%s') AS ortime,
+         hdocord.estatus,
          henctr.hpercode,
          hperson.patlast,
          hperson.patfirst,
@@ -142,9 +140,9 @@ async function getOrdersForEncounter(req, res, next) {
        INNER JOIN henctr ON henctr.enccode = hdocord.enccode
        INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
        WHERE hdocord.enccode = ?
-         ${statusCondition}
-       ORDER BY hdocord.ordate DESC, hdocord.ortime DESC, hdocord.orcode DESC`,
-      params,
+       ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC
+       LIMIT 100`,
+      [enccode],
     );
 
     return res.json({
@@ -161,15 +159,12 @@ async function getOrdersForEncounter(req, res, next) {
 
 /**
  * GET /api/db/encounters/:enccode/orders/:orcode/procedures
- * Fetch procedures (line items) for a specific order from MySQL (pcchrgcod table).
- *
- * Query params:
- *   - procedureInstanceId: filter by specific procode
+ * Fetch procedures (line items) for a specific order from MySQL.
+ * Returns empty array if pcchrgcod table doesn't exist or has different schema.
  */
 async function getProceduresForOrder(req, res, next) {
   try {
     const { enccode, orcode } = req.params;
-    const { procedureInstanceId } = req.query;
 
     if (!enccode || !orcode) {
       return res.status(400).json({
@@ -178,38 +173,18 @@ async function getProceduresForOrder(req, res, next) {
       });
     }
 
-    let instanceCondition = "";
-    const params = [enccode, orcode];
-
-    if (procedureInstanceId) {
-      instanceCondition = "AND pcchrgcod.procode = ?";
-      params.push(procedureInstanceId);
+    // Try pcchrgcod first, but don't fail if it doesn't exist
+    let rows = [];
+    try {
+      const [procRows] = await pool.query(
+        `SELECT * FROM pcchrgcod WHERE enccode = ? AND orcode = ? LIMIT 50`,
+        [enccode, orcode],
+      );
+      rows = procRows;
+    } catch (pcError) {
+      // pcchrgcod table might not exist or have different schema
+      console.warn("pcchrgcod query failed:", pcError.message);
     }
-
-    const [rows] = await pool.query(
-      `SELECT
-         pcchrgcod.procode     AS procedureInstanceId,
-         pcchrgcod.orcode,
-         pcchrgcod.enccode,
-         pcchrgcod.chrgcod,
-         pcchrgcod.procdesc   AS procedureDescription,
-         pcchrgcod.procdate   AS procedureDate,
-         pcchrgcod.proctime   AS procedureTime,
-         pcchrgcod.procstatus AS procedureStatus,
-         pcchrgcod.provcode   AS providerCode,
-         pcchrgcod.entryby    AS enteredBy,
-         DATE_FORMAT(pcchrgcod.procdate, '%Y-%m-%d') AS procdate_formatted,
-         DATE_FORMAT(pcchrgcod.proctime, '%H:%i:%s') AS proctime_formatted,
-         hdocord.oritem
-       FROM pcchrgcod
-       INNER JOIN hdocord ON hdocord.orcode = pcchrgcod.orcode
-       WHERE pcchrgcod.enccode = ?
-         AND pcchrgcod.orcode = ?
-         ${instanceCondition}
-       ORDER BY pcchrgcod.procdate DESC, pcchrgcod.proctime DESC,
-         pcchrgcod.procode DESC`,
-      params,
-    );
 
     return res.json({
       ok: true,
