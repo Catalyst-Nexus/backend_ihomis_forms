@@ -430,9 +430,60 @@ async function debugSchema(req, res, next) {
   }
 }
 
+/**
+ * GET /api/db/debug/sample-data
+ * Debug endpoint to check actual orcode/procode values in the database
+ */
+async function debugSampleData(req, res, next) {
+  try {
+    // Check orcode values in hdocord
+    const [orcodeRows] = await pool.query(
+      `SELECT DISTINCT orcode, COUNT(*) as count 
+       FROM hdocord 
+       WHERE orcode IS NOT NULL AND orcode != '' 
+       GROUP BY orcode 
+       ORDER BY count DESC 
+       LIMIT 20`
+    );
+
+    // Check procode values in pcchrgcod (if exists)
+    let procodeRows = [];
+    try {
+      [procodeRows] = await pool.query(
+        `SELECT DISTINCT procode, COUNT(*) as count 
+         FROM pcchrgcod 
+         WHERE procode IS NOT NULL AND procode != '' 
+         GROUP BY procode 
+         ORDER BY count DESC 
+         LIMIT 20`
+      );
+    } catch (pcError) {
+      procodeRows = [{ error: pcError.message }];
+    }
+
+    // Get sample hdocord rows with orcode
+    const [sampleHdocord] = await pool.query(
+      `SELECT enccode, docointkey, orcode, dodate, estatus 
+       FROM hdocord 
+       WHERE orcode IS NOT NULL AND orcode != '' 
+       LIMIT 10`
+    );
+
+    res.json({
+      ok: true,
+      orcodeSummary: orcodeRows,
+      procodeSummary: procodeRows,
+      sampleHdocord: sampleHdocord,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getOrdersForEncounter,
   getProceduresForOrder,
   registerLabResultUpload,
   debugSchema,
+  debugSampleData,
 };

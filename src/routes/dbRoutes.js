@@ -29,6 +29,7 @@ const {
   getProceduresForOrder,
   registerLabResultUpload,
   debugSchema,
+  debugSampleData,
 } = require("../controllers/labUploadController");
 
 // Form endpoints
@@ -75,6 +76,9 @@ router.get("/info", dbInfo);
 
 // Debug route - check actual table schemas
 router.get("/debug/schema", debugSchema);
+
+// Debug route - check sample orcode/procode values
+router.get("/debug/sample-data", debugSampleData);
 
 // Encounter routes
 router.get("/henctr", getHenctrInfo);
