@@ -493,8 +493,7 @@ async function searchPatients(req, res, next) {
     `;
     const [[{ total }]] = await pool.query(countQuery, params);
 
-    // Main query with JOINs instead of correlated subqueries
-    // Uses LIMIT 1 without ORDER BY for compatibility (avoids column name assumptions)
+    // Main query - essential fields only with simple JOINs
     const [rows] = await pool.query(
       `SELECT
         doc_orders.enccode,
@@ -524,7 +523,7 @@ async function searchPatients(req, res, next) {
         CONCAT_WS(' ', hperson.motlast, hperson.motfirst, hperson.motmid) AS mothers_name,
         hperson.patempstat,
         fh.hfhudname AS facility_name,
-        -- Address from grouped subquery (single pass per patient)
+        -- Address from grouped subquery
         a.brg AS bgycode,
         a.patstr,
         a.ctycode,
@@ -535,7 +534,7 @@ async function searchPatients(req, res, next) {
         pv.provname,
         r.regname,
         CONCAT_WS(', ', a.patstr, b.bgyname, c.ctyname, pv.provname, r.regname, a.patzip) AS patient_address,
-        -- Latest admission via MAX aggregate (no window functions for compatibility)
+        -- Latest admission
         latest_adm.casenum AS case_number,
         latest_adm.patage AS age,
         latest_adm.admdate AS admission_date,
@@ -546,7 +545,7 @@ async function searchPatients(req, res, next) {
         latest_adm.dispcode AS disposition,
         latest_adm.condcode AS 'condition',
         latest_adm.newold AS type_of_admission,
-        -- Vital signs (non-correlated subquery)
+        -- Vital signs
         vs.vsbp AS blood_pressure,
         vs.vstemp AS temperature,
         vs.vspulse AS pulse,
@@ -566,11 +565,7 @@ async function searchPatients(req, res, next) {
         -- PHIC
         phic.phicnum AS health_number,
         -- ICD code
-        diag.diagcode AS icd_code,
-        -- Requesting physician
-        req_phy.requesting_physician,
-        -- Admitting clerk
-        adm_clerk.admitting_clerk
+        diag.diagcode AS icd_code
       FROM (${docOrderQuery}) doc_orders
       INNER JOIN (${latestPerPatientQuery}) latest
         ON latest.hpercode = doc_orders.hpercode
@@ -581,7 +576,7 @@ async function searchPatients(req, res, next) {
         AND latest_enc.enccode = doc_orders.enccode
       INNER JOIN henctr ON henctr.enccode = doc_orders.enccode
       LEFT JOIN hperson ON hperson.hpercode = doc_orders.hpercode
-      -- Address (grouped once per patient)
+      -- Address
       LEFT JOIN (
         SELECT hpercode, MAX(brg) AS brg, MAX(patstr) AS patstr,
                MAX(ctycode) AS ctycode, MAX(provcode) AS provcode, MAX(patzip) AS patzip
@@ -592,13 +587,8 @@ async function searchPatients(req, res, next) {
       LEFT JOIN hprov pv ON a.provcode = pv.provcode
       LEFT JOIN hregion r ON c.ctyreg = r.regcode
       LEFT JOIN fhud_hospital fh ON hperson.hfhudcode = fh.hfhudcode
-      -- Latest admission (non-correlated, uses MAX)
-      LEFT JOIN (
-        SELECT hpercode, casenum, patage, admdate, disdate, admtxt, admnotes, disnotes, dispcode, condcode, newold, licno, admclerk
-        FROM hadmlog h1
-        WHERE admdate = (SELECT MAX(admdate) FROM hadmlog h2 WHERE h2.hpercode = h1.hpercode)
-        LIMIT 1
-      ) latest_adm ON latest_adm.hpercode = hperson.hpercode
+      -- Latest admission
+      LEFT JOIN hadmlog latest_adm ON latest_adm.hpercode = hperson.hpercode
       -- Vital signs
       LEFT JOIN hvitalsign vs ON vs.hpercode = hperson.hpercode
       LEFT JOIN hvsothr vso ON vso.hpercode = hperson.hpercode
@@ -613,12 +603,6 @@ async function searchPatients(req, res, next) {
       LEFT JOIN hphiclog phic ON phic.hpercode = hperson.hpercode
       -- ICD
       LEFT JOIN hencdiag diag ON diag.enccode = doc_orders.enccode
-      -- Requesting physician
-      LEFT JOIN hadmlog h_req ON h_req.hpercode = hperson.hpercode
-      LEFT JOIN hprovider pr_req ON h_req.licno = pr_req.licno
-      LEFT JOIN hpersonal req_phy ON pr_req.employeeid = req_phy.employeeid
-      -- Admitting clerk
-      LEFT JOIN hpersonal adm_clerk ON h_req.admclerk = adm_clerk.employeeid
       ORDER BY hperson.patlast, hperson.patfirst, hperson.hpercode
       LIMIT ? OFFSET ?`,
       [...params, limit, offset],
