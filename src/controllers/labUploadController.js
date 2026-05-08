@@ -4,14 +4,14 @@
  * Workflow: Patient → Encounter → Order → Procedure → Upload → Finalize
  *
  * Architecture:
- *   - MySQL    : Source of truth for hospital identifiers (hpercode, enccode, orcode, procode)
+ *   - MySQL    : Source of truth for hospital identifiers (hpercode, enccode, orcode, proccode)
  *   - Supabase: PDF file storage (Storage API) + upload metadata (lab_result_uploads table)
  *
  * Key identifiers:
  *   - hpercode  : patient ID  (from MySQL patregistry)
  *   - enccode   : encounter ID (from MySQL henctr)
  *   - orcode    : order ID     (from MySQL hdocord)
- *   - procode   : procedure ID (from MySQL pcchrgcod)
+ *   - proccode  : procedure ID (from MySQL pcchrgcod/hdocord)
  *   - docointkey: document tracking key — auto-generated on upload
  */
 
@@ -25,22 +25,12 @@ function getSupabaseAdmin() {
   if (_supabaseAdmin) return _supabaseAdmin;
 
   const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseKey) {
     throw new Error(
-      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.",
     );
-  }
-
-  // Validate that we have the SERVICE_ROLE key, not ANON key
-  try {
-    const decoded = JSON.parse(Buffer.from(supabaseKey.split('.')[1], 'base64').toString());
-    if (decoded.role !== 'service_role') {
-      console.warn("[getSupabaseAdmin] WARNING: Using ANON key instead of SERVICE_ROLE key. Some operations may fail.");
-    }
-  } catch (e) {
-    // Ignore JWT parse errors
   }
 
   _supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
@@ -118,8 +108,7 @@ async function validateOrderInMySQL(docointkey, enccode) {
  *   - DISCH = Discharge orders
  *   - DIETT = Diet orders
  * 
- * proccode format: LABOR####, RADIO####, XRAY####, etc.
- * proccode is joined with hprocm to get procdesc (description)
+ * proccode is joined with pcchrgcod to get chrgdesc (charge description)
  */
 async function getOrdersForEncounter(req, res, next) {
   try {
@@ -212,7 +201,7 @@ async function getOrdersForEncounter(req, res, next) {
         hperson.patlast,
         hperson.patfirst,
         hperson.patmiddle,
-        hprocm.procdesc AS procedureDescription
+        pcchrgcod.chrgdesc
     `;
     
     if (queryByEncounter) {
@@ -228,7 +217,7 @@ async function getOrdersForEncounter(req, res, next) {
          FROM hdocord
          INNER JOIN henctr ON henctr.enccode = hdocord.enccode
          INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
-         LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
+         LEFT JOIN pcchrgcod ON pcchrgcod.chrgcod = hdocord.proccode
          WHERE hdocord.enccode = ?
          ${typeCondition}
          ${statusCondition}
@@ -261,7 +250,7 @@ async function getOrdersForEncounter(req, res, next) {
            FROM hdocord
            INNER JOIN henctr ON henctr.enccode = hdocord.enccode
            INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
-           LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
+           LEFT JOIN pcchrgcod ON pcchrgcod.chrgcod = hdocord.proccode
            WHERE henctr.hpercode = ?
            ${typeCondition}
            ${statusCondition}
@@ -318,49 +307,6 @@ async function getOrdersForEncounter(req, res, next) {
 }
 
 /**
- * GET /api/db/encounters/:enccode/orders/:docointkey/procedures
- * Fetch procedures (line items) for a specific order from MySQL.
- * Returns empty array if pcchrgcod table doesn't exist or has different schema.
- * 
- * Note: pcchrgcod.orcode references hdocord.docointkey
- */
-async function getProceduresForOrder(req, res, next) {
-  try {
-    const { enccode, docointkey } = req.params;
-
-    if (!enccode || !docointkey) {
-      return res.status(400).json({
-        ok: false,
-        message: "enccode and docointkey are required",
-      });
-    }
-
-    // Try pcchrgcod first, but don't fail if it doesn't exist
-    let rows = [];
-    try {
-      const [procRows] = await pool.query(
-        `SELECT * FROM pcchrgcod WHERE enccode = ? AND orcode = ? LIMIT 50`,
-        [enccode, docointkey],
-      );
-      rows = procRows;
-    } catch (pcError) {
-      // pcchrgcod table might not exist or has different schema
-      console.warn("pcchrgcod query failed:", pcError.message);
-    }
-
-    return res.json({
-      ok: true,
-      enccode,
-      docointkey,
-      count: rows.length,
-      data: rows,
-    });
-  } catch (error) {
-    return next(error);
-  }
-}
-
-/**
  * POST /api/db/lab-results
  *
  * Finalize a lab upload:
@@ -374,8 +320,8 @@ async function getProceduresForOrder(req, res, next) {
  *   - hpercode              : patient ID (required)
  *   - enccode               : encounter ID (required)
  *   - orcode                : order ID (optional)
- *   - procode               : procedure ID from pcchrgcod (optional)
- *   - procedureInstanceId   : alias for procode (optional)
+ *   - proccode               : procedure ID from pcchrgcod (optional)
+ *   - procedureInstanceId   : alias for proccode (optional)
  *   - docointkey            : tracking key — auto-generated if not provided
  *   - remarks               : upload remarks (optional)
  *   - uploadedBy            : user who uploaded (optional)
@@ -386,7 +332,7 @@ async function registerLabResultUpload(req, res, next) {
       hpercode,
       enccode,
       orcode = null,
-      procode = null,
+      proccode = null,
       procedureInstanceId = null,
       docointkey: providedDocointkey = null,
       remarks = "",
@@ -434,9 +380,9 @@ async function registerLabResultUpload(req, res, next) {
       }
     }
 
-    // ── 5. Resolve procode ───────────────────────────────────────
-    // procode takes precedence; procedureInstanceId is an alias
-    const resolvedProcode = procode || procedureInstanceId || null;
+    // ── 5. Resolve proccode ───────────────────────────────────────
+    // proccode takes precedence; procedureInstanceId is an alias
+    const resolvedProccode = proccode || procedureInstanceId || null;
 
     // ── 6. Get Supabase client and generate docointkey ──────────
     const supabase = getSupabaseAdmin();
@@ -500,15 +446,15 @@ async function registerLabResultUpload(req, res, next) {
 
     // ── 8. Insert metadata into Supabase lab_result_uploads ─────
     // Column names match the existing Supabase schema exactly:
-    // hpercode, enccode, orcode, procode, procedure_instance_id, docointkey, ...
+    // hpercode, enccode, orcode, proccode, procedure_instance_id, docointkey, ...
     const { data: insertData, error: insertError } = await supabase
       .from("lab_result_uploads")
       .insert({
         hpercode,
         enccode,
         orcode: orcode || null,
-        procode: resolvedProcode || null,
-        procedure_instance_id: resolvedProcode || null,
+        proccode: resolvedProccode || null,
+        procedure_instance_id: resolvedProccode || null,
         docointkey,
         file_name: file.originalname || "lab_result.pdf",
         file_url: uploadedUrl,
@@ -544,8 +490,8 @@ async function registerLabResultUpload(req, res, next) {
       patientId: hpercode,
       encounterCode: enccode,
       orderCode: orcode,
-      procode: resolvedProcode,
-      procedureInstanceId: resolvedProcode,
+      proccode: resolvedProccode,
+      procedureInstanceId: resolvedProccode,
       message: "Lab result uploaded successfully",
     });
   } catch (error) {
@@ -591,7 +537,7 @@ async function debugSchema(req, res, next) {
 
 /**
  * GET /api/db/debug/sample-data
- * Debug endpoint to check actual orcode/procode values in the database
+ * Debug endpoint to check actual orcode/proccode values in the database
  */
 async function debugSampleData(req, res, next) {
   try {
@@ -613,7 +559,7 @@ async function debugSampleData(req, res, next) {
        LIMIT 10`
     );
 
-    // List all tables to find one with procode
+    // List all tables to find one with proccode
     const [allTables] = await pool.query(
       `SELECT TABLE_NAME 
        FROM INFORMATION_SCHEMA.TABLES 
@@ -621,8 +567,8 @@ async function debugSampleData(req, res, next) {
        ORDER BY TABLE_NAME`
     );
 
-    // Search for procode in all tables
-    const tablesWithProcode = [];
+    // Search for proccode in all tables
+    const tablesWithProccode = [];
     for (const { TABLE_NAME } of allTables) {
       const [columns] = await pool.query(
         `SELECT COLUMN_NAME 
@@ -633,7 +579,7 @@ async function debugSampleData(req, res, next) {
         [TABLE_NAME]
       );
       if (columns.length > 0) {
-        tablesWithProcode.push({
+        tablesWithProccode.push({
           table: TABLE_NAME,
           columns: columns.map(c => c.COLUMN_NAME)
         });
@@ -677,7 +623,7 @@ async function debugSampleData(req, res, next) {
       ok: true,
       orcodeSummary: orcodeRows,
       sampleHdocord: sampleHdocord,
-      tablesWithProcColumns: tablesWithProcode,
+      tablesWithProcColumns: tablesWithProccode,
       libLikeTables: libTables.map(t => t.TABLE_NAME),
       proccodeInHdocord: proccodeInHdocord,
       procedureMaster: procedureMaster,
@@ -707,7 +653,7 @@ async function getPatientUploadedFiles(req, res, next) {
     }
 
     const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
     if (!supabaseUrl || !supabaseKey) {
       return res.status(500).json({ 
@@ -717,7 +663,8 @@ async function getPatientUploadedFiles(req, res, next) {
     }
 
     // Build the REST API URL for the lab_result_uploads table
-    let apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodeURIComponent(hpercode)}&order=uploaded_at.desc&limit=100`;
+    // Note: table uses 'created_at' not 'uploaded_at'
+    let apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodeURIComponent(hpercode)}&order=created_at.desc&limit=100`;
     
     if (enccode) {
       apiUrl += `&enccode=eq.${encodeURIComponent(enccode)}`;
@@ -736,9 +683,16 @@ async function getPatientUploadedFiles(req, res, next) {
     if (!response.ok) {
       const errorText = await response.text();
       console.error("Supabase REST API error:", response.status, errorText);
+      console.error("API URL:", apiUrl);
+      console.error("Supabase URL from env:", supabaseUrl);
       return res.status(500).json({ 
         ok: false, 
-        message: `Supabase error: ${response.status}` 
+        message: `Supabase error ${response.status}: ${errorText}`,
+        debug: {
+          apiUrl: apiUrl,
+          supabaseUrl: supabaseUrl,
+          status: response.status
+        }
       });
     }
 
@@ -762,7 +716,6 @@ async function getPatientUploadedFiles(req, res, next) {
 
 module.exports = {
   getOrdersForEncounter,
-  getProceduresForOrder,
   registerLabResultUpload,
   debugSchema,
   debugSampleData,

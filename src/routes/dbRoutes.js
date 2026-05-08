@@ -26,7 +26,6 @@ const {
 // Lab Upload endpoints
 const {
   getOrdersForEncounter,
-  getProceduresForOrder,
   registerLabResultUpload,
   debugSchema,
   debugSampleData,
@@ -78,7 +77,7 @@ router.get("/info", dbInfo);
 // Debug route - check actual table schemas
 router.get("/debug/schema", debugSchema);
 
-// Debug route - check sample orcode/procode values
+// Debug route - check sample orcode/proccode values
 router.get("/debug/sample-data", debugSampleData);
 
 // Encounter routes
@@ -121,19 +120,14 @@ router.get("/users/:userId", getUserById);
 
 // ============================================================
 // Lab Upload Workflow Routes
-// Patient → Encounter → Order → Procedure → Upload → Finalize
+// Patient → Encounter → Order (hdocord) → Upload → Finalize
+//
+// Note: hdocord IS the order table - no separate procedures fetch needed.
 // ============================================================
 
 // GET /api/db/encounters/:enccode/orders
-// Fetch lab/radiology orders for an encounter
+// Fetch lab/radiology orders for an encounter (from hdocord)
 router.get("/encounters/:enccode/orders", getOrdersForEncounter);
-
-// GET /api/db/encounters/:enccode/orders/:docointkey/procedures
-// Fetch procedures (line items) for a specific order
-router.get(
-  "/encounters/:enccode/orders/:docointkey/procedures",
-  getProceduresForOrder,
-);
 
 // POST /api/db/lab-results
 // Upload a lab result PDF:
