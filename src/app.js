@@ -4,6 +4,7 @@ const morgan = require('morgan');
 
 const healthRoutes = require('./routes/healthRoutes');
 const dbRoutes = require('./routes/dbRoutes');
+const validationRoutes = require('./routes/validationRoutes');
 
 const app = express();
 
@@ -20,6 +21,7 @@ app.get('/', (req, res) => {
 
 app.use('/api/health', healthRoutes);
 app.use('/api/db', dbRoutes);
+app.use('/api/validation', validationRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
