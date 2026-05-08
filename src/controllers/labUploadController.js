@@ -108,7 +108,7 @@ async function validateOrderInMySQL(docointkey, enccode) {
  *   - DISCH = Discharge orders
  *   - DIETT = Diet orders
  * 
- * proccode is joined with pcchrgcod to get chrgdesc (charge description)
+ * proccode is joined with hprocm to get procdesc (procedure description)
  */
 async function getOrdersForEncounter(req, res, next) {
   try {
@@ -201,30 +201,30 @@ async function getOrdersForEncounter(req, res, next) {
         hperson.patlast,
         hperson.patfirst,
         hperson.patmiddle,
-        pcchrgcod.chrgdesc
+        hprocm.procdesc
     `;
     
     if (queryByEncounter) {
       // Query by enccode
-      const params = [enccode];
-      const statusCondition = applyStatusFilter ? "AND hdocord.estatus = ?" : "";
-      if (applyStatusFilter) {
-        params.push(status);
-      }
-      
-      [rows] = await pool.query(
-        `${baseSelect}
+      let params = [enccode];
+      let query = `
+        ${baseSelect}
          FROM hdocord
          INNER JOIN henctr ON henctr.enccode = hdocord.enccode
          INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
-         LEFT JOIN pcchrgcod ON pcchrgcod.chrgcod = hdocord.proccode
+         LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
          WHERE hdocord.enccode = ?
          ${typeCondition}
-         ${statusCondition}
-         ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC
-         LIMIT 100`,
-        params
-      );
+      `;
+      
+      if (applyStatusFilter) {
+        query += " AND hdocord.estatus = ?";
+        params.push(status);
+      }
+      
+      query += ` ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC LIMIT 100`;
+      
+      [rows] = await pool.query(query, params);
     } else if (queryByPatient) {
       // Query by hpercode - get all encounters for this patient
       let resolvedHpercode = hpercode;
@@ -250,7 +250,7 @@ async function getOrdersForEncounter(req, res, next) {
            FROM hdocord
            INNER JOIN henctr ON henctr.enccode = hdocord.enccode
            INNER JOIN hperson ON hperson.hpercode = henctr.hpercode
-           LEFT JOIN pcchrgcod ON pcchrgcod.chrgcod = hdocord.proccode
+           LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
            WHERE henctr.hpercode = ?
            ${typeCondition}
            ${statusCondition}

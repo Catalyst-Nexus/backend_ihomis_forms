@@ -494,6 +494,86 @@ async function searchPatients(req, res, next) {
     `;
     const [patientIds] = await pool.query(patientIdsSql, [...baseParams, limit, offset]);
 
+    // If no patients found via hdocord, fall back to hperson direct search
+    // This allows finding patients who don't have any orders yet
+    if (patientIds.length === 0 && keyword) {
+      const keywordLike = `%${keyword}%`;
+      const [directPatients] = await pool.query(
+        `SELECT 
+          hpercode,
+          patlast,
+          patfirst,
+          patmiddle,
+          patsuffix,
+          patsex,
+          patbdate,
+          hfhudcode
+         FROM hperson
+         WHERE patlast LIKE ? 
+            OR patfirst LIKE ? 
+            OR patmiddle LIKE ?
+            OR hpercode LIKE ?
+            OR CONCAT_WS(' ', patlast, patfirst) LIKE ?
+         ORDER BY patlast, patfirst
+         LIMIT ? OFFSET ?`,
+        [keywordLike, keywordLike, keywordLike, keywordLike, keywordLike, limit, offset]
+      );
+      
+      if (directPatients.length > 0) {
+        // Get count for these patients
+        const [[{ total: directTotal }]] = await pool.query(
+          `SELECT COUNT(*) as total FROM hperson
+           WHERE patlast LIKE ? 
+              OR patfirst LIKE ? 
+              OR patmiddle LIKE ?
+              OR hpercode LIKE ?
+              OR CONCAT_WS(' ', patlast, patfirst) LIKE ?`,
+          [keywordLike, keywordLike, keywordLike, keywordLike, keywordLike]
+        );
+        
+        const data = directPatients.map((row) => ({
+          ...mapPatientRow(row),
+          enccode: "",
+          fhud: row.hfhudcode || "",
+          docointkey: "",
+          user: "",
+          firstName: row.patfirst || "",
+          middleName: row.patmiddle || "",
+          lastName: row.patlast || "",
+        }));
+        
+        return res.json({
+          ok: true,
+          count: data.length,
+          pagination: { limit, offset, total: directTotal },
+          filters: {
+            search: keyword || null,
+            user: user || null,
+            fhud: fhud || null,
+            enccode: enccode || null,
+            docointkey: docointkey || null,
+            _fallback: "hperson_direct_search",
+          },
+          data,
+        });
+      }
+      
+      // No results from hdocord and no results from hperson
+      return res.json({
+        ok: true,
+        count: 0,
+        pagination: { limit, offset, total },
+        filters: {
+          search: keyword || null,
+          user: user || null,
+          fhud: fhud || null,
+          enccode: enccode || null,
+          docointkey: docointkey || null,
+        },
+        data: [],
+      });
+    }
+    
     // If no patients found, return empty
     if (patientIds.length === 0) {
       return res.json({
