@@ -33,6 +33,16 @@ function getSupabaseAdmin() {
     );
   }
 
+  // Validate that we have the SERVICE_ROLE key, not ANON key
+  try {
+    const decoded = JSON.parse(Buffer.from(supabaseKey.split('.')[1], 'base64').toString());
+    if (decoded.role !== 'service_role') {
+      console.warn("[getSupabaseAdmin] WARNING: Using ANON key instead of SERVICE_ROLE key. Some operations may fail.");
+    }
+  } catch (e) {
+    // Ignore JWT parse errors
+  }
+
   _supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
@@ -682,7 +692,7 @@ async function debugSampleData(req, res, next) {
  * GET /api/db/patients/:hpercode/uploaded-files
  * 
  * Fetch all uploaded lab result files for a patient from Supabase.
- * Used to show previously uploaded PDFs in the Review step.
+ * Uses REST API directly to avoid JS client issues.
  */
 async function getPatientUploadedFiles(req, res, next) {
   try {
@@ -696,30 +706,43 @@ async function getPatientUploadedFiles(req, res, next) {
       });
     }
 
-    const supabase = getSupabaseAdmin();
-    
-    // Build query for lab_result_uploads
-    let query = supabase
-      .from("lab_result_uploads")
-      .select("*")
-      .eq("hpercode", hpercode)
-      .order("uploaded_at", { ascending: false })
-      .limit(100);
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    // Filter by encounter if provided
-    if (enccode) {
-      query = query.eq("enccode", enccode);
-    }
-
-    const { data: files, error } = await query;
-
-    if (error) {
-      console.error("Error fetching uploaded files:", error);
+    if (!supabaseUrl || !supabaseKey) {
       return res.status(500).json({ 
         ok: false, 
-        message: `Failed to fetch uploaded files: ${error.message}` 
+        message: "Supabase not configured" 
       });
     }
+
+    // Build the REST API URL for the lab_result_uploads table
+    let apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodeURIComponent(hpercode)}&order=uploaded_at.desc&limit=100`;
+    
+    if (enccode) {
+      apiUrl += `&enccode=eq.${encodeURIComponent(enccode)}`;
+    }
+
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Prefer': 'count=exact'
+      }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Supabase REST API error:", response.status, errorText);
+      return res.status(500).json({ 
+        ok: false, 
+        message: `Supabase error: ${response.status}` 
+      });
+    }
+
+    const files = await response.json();
 
     return res.json({
       ok: true,
@@ -730,7 +753,10 @@ async function getPatientUploadedFiles(req, res, next) {
     });
   } catch (error) {
     console.error("getPatientUploadedFiles error:", error);
-    return next(error);
+    return res.status(500).json({ 
+      ok: false, 
+      message: `Error: ${error.message}` 
+    });
   }
 }
 
