@@ -128,15 +128,17 @@ async function getOrdersForEncounter(req, res, next) {
 
     // Build type filter based on orcode column
     // LABOR = Lab, RADIO = Radiology
+    // Note: orcode values are exactly 'LABOR', 'RADIO', 'DISCH', 'DIETT'
     let typeCondition = "";
     if (orderType === "lab") {
-      typeCondition = "AND (hdocord.orcode = 'LABOR' OR hdocord.orcode LIKE 'LAB%' OR hdocord.orcode LIKE 'L%')";
+      typeCondition = "AND hdocord.orcode = 'LABOR'";
     } else if (orderType === "rad") {
-      typeCondition = "AND (hdocord.orcode = 'RADIO' OR hdocord.orcode LIKE 'RAD%' OR hdocord.orcode LIKE 'XRAY%')";
+      typeCondition = "AND hdocord.orcode = 'RADIO'";
     }
     // 'all' returns all orders without type filter
 
     // Handle status filter - support both "all" and specific statuses
+    // Note: estatus values in the database are 'U', null, etc.
     const applyStatusFilter = status && status !== "all" && status.trim() !== "";
     
     // Determine query approach: by enccode or by hpercode
