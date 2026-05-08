@@ -30,6 +30,7 @@ const {
   registerLabResultUpload,
   debugSchema,
   debugSampleData,
+  getPatientUploadedFiles,
 } = require("../controllers/labUploadController");
 
 // Form endpoints
@@ -100,6 +101,10 @@ router.get(
 // Lab upload flow - patient encounters list (for modal selection)
 // NOTE: This route MUST come before /patients/history/:hpercode to avoid route conflict
 router.get("/patients/:hpercode/encounters", getEncountersForPatient);
+
+// GET /api/db/patients/:hpercode/uploaded-files
+// Fetch all uploaded lab result files for a patient from Supabase
+router.get("/patients/:hpercode/uploaded-files", getPatientUploadedFiles);
 
 // Form routes
 router.get("/forms/baby", listBabyFormRecords);

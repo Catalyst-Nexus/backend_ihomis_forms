@@ -136,7 +136,8 @@ async function getOrdersForEncounter(req, res, next) {
     }
     // 'all' returns all orders without type filter
 
-    let statusCondition = "";
+    // Handle status filter - support both "all" and specific statuses
+    const applyStatusFilter = status && status !== "all" && status.trim() !== "";
     
     // Determine query approach: by enccode or by hpercode
     let queryByEncounter = false;
@@ -205,8 +206,8 @@ async function getOrdersForEncounter(req, res, next) {
     if (queryByEncounter) {
       // Query by enccode
       const params = [enccode];
-      if (status && status !== "all") {
-        statusCondition = "AND hdocord.estatus = ?";
+      const statusCondition = applyStatusFilter ? "AND hdocord.estatus = ?" : "";
+      if (applyStatusFilter) {
         params.push(status);
       }
       
@@ -238,8 +239,8 @@ async function getOrdersForEncounter(req, res, next) {
       
       if (resolvedHpercode) {
         const params = [resolvedHpercode];
-        if (status && status !== "all") {
-          statusCondition = "AND hdocord.estatus = ?";
+        const statusCondition = applyStatusFilter ? "AND hdocord.estatus = ?" : "";
+        if (applyStatusFilter) {
           params.push(status);
         }
         
@@ -675,10 +676,67 @@ async function debugSampleData(req, res, next) {
   }
 }
 
+/**
+ * GET /api/db/patients/:hpercode/uploaded-files
+ * 
+ * Fetch all uploaded lab result files for a patient from Supabase.
+ * Used to show previously uploaded PDFs in the Review step.
+ */
+async function getPatientUploadedFiles(req, res, next) {
+  try {
+    const { hpercode } = req.params;
+    const { enccode } = req.query;
+
+    if (!hpercode) {
+      return res.status(400).json({ 
+        ok: false, 
+        message: "hpercode is required" 
+      });
+    }
+
+    const supabase = getSupabaseAdmin();
+    
+    // Build query for lab_result_uploads
+    let query = supabase
+      .from("lab_result_uploads")
+      .select("*")
+      .eq("hpercode", hpercode)
+      .order("uploaded_at", { ascending: false })
+      .limit(100);
+
+    // Filter by encounter if provided
+    if (enccode) {
+      query = query.eq("enccode", enccode);
+    }
+
+    const { data: files, error } = await query;
+
+    if (error) {
+      console.error("Error fetching uploaded files:", error);
+      return res.status(500).json({ 
+        ok: false, 
+        message: `Failed to fetch uploaded files: ${error.message}` 
+      });
+    }
+
+    return res.json({
+      ok: true,
+      hpercode,
+      enccode: enccode || null,
+      count: files?.length || 0,
+      data: files || [],
+    });
+  } catch (error) {
+    console.error("getPatientUploadedFiles error:", error);
+    return next(error);
+  }
+}
+
 module.exports = {
   getOrdersForEncounter,
   getProceduresForOrder,
   registerLabResultUpload,
   debugSchema,
   debugSampleData,
+  getPatientUploadedFiles,
 };
