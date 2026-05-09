@@ -489,9 +489,28 @@ async function checkPhicStatus(enccode) {
 async function validateAdmission(req, res, next) {
   try {
     const { enccode } = req.params;
-    const hpercode = await resolveHpercode(enccode);
+    
+    // Check if enccode exists in master table
+    const [enccodeCheck] = await pool.query(
+      "SELECT hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1",
+      [enccode]
+    );
+    const hpercode = enccodeCheck?.[0]?.hpercode || "";
+    const toecode = enccodeCheck?.[0]?.toecode || "";
+    
+    console.log(`[ADMISSION DEBUG] Processing enccode=${enccode}, found=${enccodeCheck.length > 0}, hpercode=${hpercode}, toecode=${toecode}`);
 
-    console.log(`[ADMISSION DEBUG] Processing enccode=${enccode}, hpercode=${hpercode}`);
+    // Check sample table for debugging
+    let sampleVitalSigns = null;
+    try {
+      const [vitalSignsSample] = await pool.query(
+        "SELECT enccode, hpercode FROM hvitalsign WHERE enccode = ? LIMIT 1",
+        [enccode]
+      );
+      sampleVitalSigns = vitalSignsSample.length > 0 ? vitalSignsSample[0] : null;
+    } catch (e) {
+      console.error("Error sampling hvitalsign:", e);
+    }
 
     const results = {
       enccode,
@@ -554,10 +573,14 @@ async function validateAdmission(req, res, next) {
         timestamp: new Date().toISOString(),
         enccode,
         hpercode,
+        toecode,
+        encounterExists: enccodeCheck.length > 0,
+        sampleVitalSignsFound: sampleVitalSigns !== null,
+        sampleVitalSignsData: sampleVitalSigns,
         totalChecks: Object.keys(results).length - 1,
         passedChecks: Object.values(results).filter(v => v === true).length,
         failedChecks: Object.values(results).filter(v => v === false).length,
-        queryDetails: "Added hpercode fallback for all checks",
+        note: "If encounterExists=false, enccode not found in henctr. If sampleVitalSignsFound=false, hvitalsign has no data for this enccode.",
       },
     });
   } catch (error) {
@@ -635,9 +658,28 @@ async function validateDischarge(req, res, next) {
 async function getValidationDetails(req, res, next) {
   try {
     const { enccode } = req.params;
-    const hpercode = await resolveHpercode(enccode);
+    
+    // Check if enccode exists in master table
+    const [enccodeCheck] = await pool.query(
+      "SELECT hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1",
+      [enccode]
+    );
+    const hpercode = enccodeCheck?.[0]?.hpercode || "";
+    const toecode = enccodeCheck?.[0]?.toecode || "";
 
-    console.log(`[DETAILS DEBUG] Processing enccode=${enccode}, hpercode=${hpercode}`);
+    console.log(`[DETAILS DEBUG] Processing enccode=${enccode}, found=${enccodeCheck.length > 0}, hpercode=${hpercode}, toecode=${toecode}`);
+
+    // Check sample table for debugging
+    let sampleVitalSigns = null;
+    try {
+      const [vitalSignsSample] = await pool.query(
+        "SELECT enccode, hpercode FROM hvitalsign WHERE enccode = ? LIMIT 1",
+        [enccode]
+      );
+      sampleVitalSigns = vitalSignsSample.length > 0 ? vitalSignsSample[0] : null;
+    } catch (e) {
+      console.error("Error sampling hvitalsign:", e);
+    }
 
     const allValidations = {
       admission: {
@@ -688,10 +730,14 @@ async function getValidationDetails(req, res, next) {
         timestamp: new Date().toISOString(),
         enccode,
         hpercode,
+        toecode,
+        encounterExists: enccodeCheck.length > 0,
+        sampleVitalSignsFound: sampleVitalSigns !== null,
+        sampleVitalSignsData: sampleVitalSigns,
         admissionChecksPassed: admissionPassed,
         dischargeChecksPassed: dischargePassed,
         phicStatus: allValidations.phic,
-        note: "Debug info - these fields will be removed after diagnosis",
+        note: "If encounterExists=false, enccode not found in henctr. If sampleVitalSignsFound=false, hvitalsign has no data for this enccode.",
       },
     });
   } catch (error) {
