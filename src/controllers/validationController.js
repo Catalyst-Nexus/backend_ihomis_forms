@@ -1,15 +1,66 @@
 const pool = require("../config/db");
 
+const columnCache = new Map();
+
+async function tableHasColumn(tableName, columnName) {
+  const cacheKey = `${tableName}.${columnName}`;
+  if (columnCache.has(cacheKey)) {
+    return columnCache.get(cacheKey);
+  }
+
+  const [rows] = await pool.query(
+    `SELECT COUNT(*) AS total
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?`,
+    [tableName, columnName],
+  );
+
+  const exists = Number(rows?.[0]?.total || 0) > 0;
+  columnCache.set(cacheKey, exists);
+  return exists;
+}
+
+async function resolveHpercode(enccode) {
+  if (!enccode) return "";
+  const [rows] = await pool.query(
+    "SELECT hpercode FROM henctr WHERE enccode = ? LIMIT 1",
+    [enccode],
+  );
+  return rows?.[0]?.hpercode || "";
+}
+
+async function hasRecordByEnccode({ table, enccode, where = "", params = [] }) {
+  const sql = `SELECT 1 FROM ${table} WHERE enccode = ?${where} LIMIT 1`;
+  const [rows] = await pool.query(sql, [enccode, ...params]);
+  return rows.length > 0;
+}
+
+async function hasRecordByHpercode({ table, hpercode, where = "", params = [] }) {
+  if (!hpercode) return false;
+  const hasColumn = await tableHasColumn(table, "hpercode");
+  if (!hasColumn) return false;
+  const sql = `SELECT 1 FROM ${table} WHERE hpercode = ?${where} LIMIT 1`;
+  const [rows] = await pool.query(sql, [hpercode, ...params]);
+  return rows.length > 0;
+}
+
 /**
  * Check if admission vital signs exist for an encounter
  */
-async function checkAdmissionVitalSigns(enccode) {
+async function checkAdmissionVitalSigns(enccode, hpercode = "") {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM hvitalsign WHERE enccode = ? LIMIT 1",
-      [enccode]
-    );
-    return rows.length > 0;
+    const foundByEnccode = await hasRecordByEnccode({
+      table: "hvitalsign",
+      enccode,
+    });
+    if (foundByEnccode) return true;
+
+    return await hasRecordByHpercode({
+      table: "hvitalsign",
+      hpercode,
+    });
   } catch (error) {
     console.error("Error checking admission vital signs:", error);
     throw error;
@@ -19,13 +70,18 @@ async function checkAdmissionVitalSigns(enccode) {
 /**
  * Check if admission BMI exists for an encounter
  */
-async function checkAdmissionBMI(enccode) {
+async function checkAdmissionBMI(enccode, hpercode = "") {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM hvsothr WHERE enccode = ? LIMIT 1",
-      [enccode]
-    );
-    return rows.length > 0;
+    const foundByEnccode = await hasRecordByEnccode({
+      table: "hvsothr",
+      enccode,
+    });
+    if (foundByEnccode) return true;
+
+    return await hasRecordByHpercode({
+      table: "hvsothr",
+      hpercode,
+    });
   } catch (error) {
     console.error("Error checking admission BMI:", error);
     throw error;
@@ -35,13 +91,22 @@ async function checkAdmissionBMI(enccode) {
 /**
  * Check if admission history exists for a specific history type
  */
-async function checkAdmissionHistory(enccode, histype) {
+async function checkAdmissionHistory(enccode, histype, hpercode = "") {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM hmrhisto WHERE enccode = ? AND histype = ? LIMIT 1",
-      [enccode, histype]
-    );
-    return rows.length > 0;
+    const foundByEnccode = await hasRecordByEnccode({
+      table: "hmrhisto",
+      enccode,
+      where: " AND histype = ?",
+      params: [histype],
+    });
+    if (foundByEnccode) return true;
+
+    return await hasRecordByHpercode({
+      table: "hmrhisto",
+      hpercode,
+      where: " AND histype = ?",
+      params: [histype],
+    });
   } catch (error) {
     console.error("Error checking admission history:", error);
     throw error;
@@ -51,7 +116,7 @@ async function checkAdmissionHistory(enccode, histype) {
 /**
  * Check if admission OB history exists for OB cases
  */
-async function checkAdmissionHistoryOB(enccode) {
+async function checkAdmissionHistoryOB(enccode, hpercode = "") {
   try {
     // First check if it's an OB case
     const [admLog] = await pool.query(
@@ -65,15 +130,18 @@ async function checkAdmissionHistoryOB(enccode) {
 
     // S0005 = OBSTETRICS
     if (tscode === "S0005") {
-      const [rows] = await pool.query(
-        `SELECT * FROM hmrhistoob 
-         WHERE enccode = ? 
-         AND obg IS NOT NULL 
-         AND oblmp IS NOT NULL 
-         LIMIT 1`,
-        [enccode]
-      );
-      return rows.length > 0;
+      const foundByEnccode = await hasRecordByEnccode({
+        table: "hmrhistoob",
+        enccode,
+        where: " AND obg IS NOT NULL AND oblmp IS NOT NULL",
+      });
+      if (foundByEnccode) return true;
+
+      return await hasRecordByHpercode({
+        table: "hmrhistoob",
+        hpercode,
+        where: " AND obg IS NOT NULL AND oblmp IS NOT NULL",
+      });
     }
 
     return true;
@@ -86,7 +154,7 @@ async function checkAdmissionHistoryOB(enccode) {
 /**
  * Check if prenatal data exists for OB cases
  */
-async function checkAdmissionPrenatal(enccode) {
+async function checkAdmissionPrenatal(enccode, hpercode = "") {
   try {
     // First check if it's an OB case
     const [admLog] = await pool.query(
@@ -100,18 +168,20 @@ async function checkAdmissionPrenatal(enccode) {
 
     // S0005 = OBSTETRICS
     if (tscode === "S0005") {
-      const [rows] = await pool.query(
-        `SELECT * FROM hprenatal 
-         WHERE enccode = ? 
-         AND mcp IS NOT NULL 
-         AND prenataldte2 IS NOT NULL 
-         AND prenataldte3 IS NOT NULL 
-         AND prenataldte4 IS NOT NULL 
-         AND expectdeliverydte IS NOT NULL 
-         LIMIT 1`,
-        [enccode]
-      );
-      return rows.length > 0;
+      const foundByEnccode = await hasRecordByEnccode({
+        table: "hprenatal",
+        enccode,
+        where:
+          " AND mcp IS NOT NULL AND prenataldte2 IS NOT NULL AND prenataldte3 IS NOT NULL AND prenataldte4 IS NOT NULL AND expectdeliverydte IS NOT NULL",
+      });
+      if (foundByEnccode) return true;
+
+      return await hasRecordByHpercode({
+        table: "hprenatal",
+        hpercode,
+        where:
+          " AND mcp IS NOT NULL AND prenataldte2 IS NOT NULL AND prenataldte3 IS NOT NULL AND prenataldte4 IS NOT NULL AND expectdeliverydte IS NOT NULL",
+      });
     }
 
     return true;
@@ -124,31 +194,50 @@ async function checkAdmissionPrenatal(enccode) {
 /**
  * Check if pertinent signs & symptoms exist
  */
-async function checkAdmissionPertinentSignSymptoms(enccode) {
+async function checkAdmissionPertinentSignSymptoms(enccode, hpercode = "") {
   try {
-    // Check signs and symptoms
-    const [signsSymptoms] = await pool.query(
-      "SELECT * FROM hsignsymptoms WHERE enccode = ? LIMIT 1",
-      [enccode]
-    );
+    const signsByEnccode = await hasRecordByEnccode({
+      table: "hsignsymptoms",
+      enccode,
+    });
+    if (signsByEnccode) return true;
 
-    if (signsSymptoms.length > 0) return true;
+    const othersByEnccode = await hasRecordByEnccode({
+      table: "hpesignsothers",
+      enccode,
+      where: " AND pesigntype = ?",
+      params: ["others"],
+    });
+    if (othersByEnccode) return true;
 
-    // Check others
-    const [others] = await pool.query(
-      "SELECT * FROM hpesignsothers WHERE enccode = ? AND pesigntype = 'others' LIMIT 1",
-      [enccode]
-    );
+    const painByEnccode = await hasRecordByEnccode({
+      table: "hpesignsothers",
+      enccode,
+      where: " AND pesigntype = ?",
+      params: ["painsite"],
+    });
+    if (painByEnccode) return true;
 
-    if (others.length > 0) return true;
+    const signsByHpercode = await hasRecordByHpercode({
+      table: "hsignsymptoms",
+      hpercode,
+    });
+    if (signsByHpercode) return true;
 
-    // Check pain site
-    const [pain] = await pool.query(
-      "SELECT * FROM hpesignsothers WHERE enccode = ? AND pesigntype = 'painsite' LIMIT 1",
-      [enccode]
-    );
+    const othersByHpercode = await hasRecordByHpercode({
+      table: "hpesignsothers",
+      hpercode,
+      where: " AND pesigntype = ?",
+      params: ["others"],
+    });
+    if (othersByHpercode) return true;
 
-    return pain.length > 0;
+    return await hasRecordByHpercode({
+      table: "hpesignsothers",
+      hpercode,
+      where: " AND pesigntype = ?",
+      params: ["painsite"],
+    });
   } catch (error) {
     console.error("Error checking pertinent signs & symptoms:", error);
     throw error;
@@ -158,13 +247,18 @@ async function checkAdmissionPertinentSignSymptoms(enccode) {
 /**
  * Check if physical exam exists
  */
-async function checkAdmissionPhysicalExam(enccode) {
+async function checkAdmissionPhysicalExam(enccode, hpercode = "") {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM hphyexam WHERE enccode = ? LIMIT 1",
-      [enccode]
-    );
-    return rows.length > 0;
+    const foundByEnccode = await hasRecordByEnccode({
+      table: "hphyexam",
+      enccode,
+    });
+    if (foundByEnccode) return true;
+
+    return await hasRecordByHpercode({
+      table: "hphyexam",
+      hpercode,
+    });
   } catch (error) {
     console.error("Error checking physical exam:", error);
     throw error;
@@ -174,13 +268,18 @@ async function checkAdmissionPhysicalExam(enccode) {
 /**
  * Check if system review exists
  */
-async function checkAdmissionSystemReview(enccode) {
+async function checkAdmissionSystemReview(enccode, hpercode = "") {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM hmrsrev WHERE enccode = ? LIMIT 1",
-      [enccode]
-    );
-    return rows.length > 0;
+    const foundByEnccode = await hasRecordByEnccode({
+      table: "hmrsrev",
+      enccode,
+    });
+    if (foundByEnccode) return true;
+
+    return await hasRecordByHpercode({
+      table: "hmrsrev",
+      hpercode,
+    });
   } catch (error) {
     console.error("Error checking system review:", error);
     throw error;
@@ -190,13 +289,18 @@ async function checkAdmissionSystemReview(enccode) {
 /**
  * Check if course in ward exists
  */
-async function checkAdmissionCourseWard(enccode) {
+async function checkAdmissionCourseWard(enccode, hpercode = "") {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM hcrsward WHERE enccode = ? LIMIT 1",
-      [enccode]
-    );
-    return rows.length > 0;
+    const foundByEnccode = await hasRecordByEnccode({
+      table: "hcrsward",
+      enccode,
+    });
+    if (foundByEnccode) return true;
+
+    return await hasRecordByHpercode({
+      table: "hcrsward",
+      hpercode,
+    });
   } catch (error) {
     console.error("Error checking course in ward:", error);
     throw error;
@@ -385,28 +489,29 @@ async function checkPhicStatus(enccode) {
 async function validateAdmission(req, res, next) {
   try {
     const { enccode } = req.params;
+    const hpercode = await resolveHpercode(enccode);
 
     const results = {
       enccode,
-      vitalSigns: await checkAdmissionVitalSigns(enccode),
-      bmi: await checkAdmissionBMI(enccode),
-      historyGDPPR: await checkAdmissionHistory(enccode, "GDPPR"),
-      historyCOMPL: await checkAdmissionHistory(enccode, "COMPL"),
-      historyPRHIS: await checkAdmissionHistory(enccode, "PRHIS"),
-      historyPAHIS: await checkAdmissionHistory(enccode, "PAHIS"),
-      historyOCENV: await checkAdmissionHistory(enccode, "OCENV"),
-      historyFAHIS: await checkAdmissionHistory(enccode, "FAHIS"),
-      historyDRTHE: await checkAdmissionHistory(enccode, "DRTHE"),
-      historyALCOH: await checkAdmissionHistory(enccode, "ALCOH"),
-      historyTOBAC: await checkAdmissionHistory(enccode, "TOBAC"),
-      historyDRUGA: await checkAdmissionHistory(enccode, "DRUGA"),
-      historyOTHAL: await checkAdmissionHistory(enccode, "OTHAL"),
-      historyOB: await checkAdmissionHistoryOB(enccode),
-      prenatal: await checkAdmissionPrenatal(enccode),
-      pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(enccode),
-      physicalExam: await checkAdmissionPhysicalExam(enccode),
-      systemReview: await checkAdmissionSystemReview(enccode),
-      courseWard: await checkAdmissionCourseWard(enccode),
+      vitalSigns: await checkAdmissionVitalSigns(enccode, hpercode),
+      bmi: await checkAdmissionBMI(enccode, hpercode),
+      historyGDPPR: await checkAdmissionHistory(enccode, "GDPPR", hpercode),
+      historyCOMPL: await checkAdmissionHistory(enccode, "COMPL", hpercode),
+      historyPRHIS: await checkAdmissionHistory(enccode, "PRHIS", hpercode),
+      historyPAHIS: await checkAdmissionHistory(enccode, "PAHIS", hpercode),
+      historyOCENV: await checkAdmissionHistory(enccode, "OCENV", hpercode),
+      historyFAHIS: await checkAdmissionHistory(enccode, "FAHIS", hpercode),
+      historyDRTHE: await checkAdmissionHistory(enccode, "DRTHE", hpercode),
+      historyALCOH: await checkAdmissionHistory(enccode, "ALCOH", hpercode),
+      historyTOBAC: await checkAdmissionHistory(enccode, "TOBAC", hpercode),
+      historyDRUGA: await checkAdmissionHistory(enccode, "DRUGA", hpercode),
+      historyOTHAL: await checkAdmissionHistory(enccode, "OTHAL", hpercode),
+      historyOB: await checkAdmissionHistoryOB(enccode, hpercode),
+      prenatal: await checkAdmissionPrenatal(enccode, hpercode),
+      pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(enccode, hpercode),
+      physicalExam: await checkAdmissionPhysicalExam(enccode, hpercode),
+      systemReview: await checkAdmissionSystemReview(enccode, hpercode),
+      courseWard: await checkAdmissionCourseWard(enccode, hpercode),
     };
 
     // Check if all required fields are completed
@@ -498,30 +603,31 @@ async function validateDischarge(req, res, next) {
 async function getValidationDetails(req, res, next) {
   try {
     const { enccode } = req.params;
+    const hpercode = await resolveHpercode(enccode);
 
     const allValidations = {
       admission: {
-        vitalSigns: await checkAdmissionVitalSigns(enccode),
-        bmi: await checkAdmissionBMI(enccode),
+        vitalSigns: await checkAdmissionVitalSigns(enccode, hpercode),
+        bmi: await checkAdmissionBMI(enccode, hpercode),
         histories: {
-          GDPPR: await checkAdmissionHistory(enccode, "GDPPR"),
-          COMPL: await checkAdmissionHistory(enccode, "COMPL"),
-          PRHIS: await checkAdmissionHistory(enccode, "PRHIS"),
-          PAHIS: await checkAdmissionHistory(enccode, "PAHIS"),
-          OCENV: await checkAdmissionHistory(enccode, "OCENV"),
-          FAHIS: await checkAdmissionHistory(enccode, "FAHIS"),
-          DRTHE: await checkAdmissionHistory(enccode, "DRTHE"),
-          ALCOH: await checkAdmissionHistory(enccode, "ALCOH"),
-          TOBAC: await checkAdmissionHistory(enccode, "TOBAC"),
-          DRUGA: await checkAdmissionHistory(enccode, "DRUGA"),
-          OTHAL: await checkAdmissionHistory(enccode, "OTHAL"),
+          GDPPR: await checkAdmissionHistory(enccode, "GDPPR", hpercode),
+          COMPL: await checkAdmissionHistory(enccode, "COMPL", hpercode),
+          PRHIS: await checkAdmissionHistory(enccode, "PRHIS", hpercode),
+          PAHIS: await checkAdmissionHistory(enccode, "PAHIS", hpercode),
+          OCENV: await checkAdmissionHistory(enccode, "OCENV", hpercode),
+          FAHIS: await checkAdmissionHistory(enccode, "FAHIS", hpercode),
+          DRTHE: await checkAdmissionHistory(enccode, "DRTHE", hpercode),
+          ALCOH: await checkAdmissionHistory(enccode, "ALCOH", hpercode),
+          TOBAC: await checkAdmissionHistory(enccode, "TOBAC", hpercode),
+          DRUGA: await checkAdmissionHistory(enccode, "DRUGA", hpercode),
+          OTHAL: await checkAdmissionHistory(enccode, "OTHAL", hpercode),
         },
-        ob: await checkAdmissionHistoryOB(enccode),
-        prenatal: await checkAdmissionPrenatal(enccode),
-        pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(enccode),
-        physicalExam: await checkAdmissionPhysicalExam(enccode),
-        systemReview: await checkAdmissionSystemReview(enccode),
-        courseWard: await checkAdmissionCourseWard(enccode),
+        ob: await checkAdmissionHistoryOB(enccode, hpercode),
+        prenatal: await checkAdmissionPrenatal(enccode, hpercode),
+        pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(enccode, hpercode),
+        physicalExam: await checkAdmissionPhysicalExam(enccode, hpercode),
+        systemReview: await checkAdmissionSystemReview(enccode, hpercode),
+        courseWard: await checkAdmissionCourseWard(enccode, hpercode),
       },
       discharge: {
         order: await checkDischargeOrder(enccode),
@@ -549,7 +655,8 @@ async function getValidationDetails(req, res, next) {
 async function checkHistory(req, res, next) {
   try {
     const { enccode, histype } = req.params;
-    const exists = await checkAdmissionHistory(enccode, histype);
+    const hpercode = await resolveHpercode(enccode);
+    const exists = await checkAdmissionHistory(enccode, histype, hpercode);
 
     res.json({
       ok: true,
