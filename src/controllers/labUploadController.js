@@ -143,9 +143,10 @@ async function getOrdersForEncounter(req, res, next) {
     // Determine query approach: by enccode or by hpercode
     let queryByEncounter = false;
     let queryByPatient = false;
+    let resolvedEnccode = enccode; // Use the full enccode for hdocord
     
     if (enccode) {
-      // First try by enccode
+      // First try by enccode directly
       const [checkByEnc] = await pool.query(
         `SELECT COUNT(*) as total FROM hdocord WHERE enccode = ?`,
         [enccode]
@@ -154,6 +155,19 @@ async function getOrdersForEncounter(req, res, next) {
       
       if (checkByEnc[0]?.total > 0) {
         queryByEncounter = true;
+      } else {
+        // Try to find the full enccode from hdocord that starts with the provided enccode
+        // hdocord.enccode format: {short_enccode}{date}{time}
+        // Example: 000502700000000000296104/18/202510:07:32
+        const [fullEncMatch] = await pool.query(
+          `SELECT enccode FROM hdocord WHERE enccode LIKE ? LIMIT 1`,
+          [`${enccode}%`]
+        );
+        if (fullEncMatch[0]?.enccode) {
+          console.log(`[getOrdersForEncounter] Found full enccode: "${fullEncMatch[0].enccode}" for short: "${enccode}"`);
+          resolvedEnccode = fullEncMatch[0].enccode;
+          queryByEncounter = true;
+        }
       }
     }
     
@@ -205,8 +219,8 @@ async function getOrdersForEncounter(req, res, next) {
     `;
     
     if (queryByEncounter) {
-      // Query by enccode
-      let params = [enccode];
+      // Query by enccode - use resolvedEnccode (full enccode from hdocord)
+      let params = [resolvedEnccode];
       let query = `
         ${baseSelect}
          FROM hdocord
