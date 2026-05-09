@@ -390,7 +390,7 @@ async function registerLabResultUpload(req, res, next) {
       providedDocointkey || (await generateDocointkey(supabase));
 
     // ── 7. Upload PDF to Supabase Storage ───────────────────────
-    const bucketName = process.env.SUPABASE_LAB_BUCKET || "lab-results";
+    const bucketName = process.env.SUPABASE_LAB_RESULTS_BUCKET || process.env.SUPABASE_LAB_BUCKET || "lab-results";
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const safeName = String(file.originalname || "lab_result.pdf")
       .trim()
