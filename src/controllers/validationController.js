@@ -22,13 +22,56 @@ async function tableHasColumn(tableName, columnName) {
   return exists;
 }
 
-async function resolveHpercode(enccode) {
-  if (!enccode) return "";
-  const [rows] = await pool.query(
-    "SELECT hpercode FROM henctr WHERE enccode = ? LIMIT 1",
+async function resolveEncounterRecord(enccode) {
+  if (!enccode) {
+    return {
+      enccode: "",
+      hpercode: "",
+      toecode: "",
+      matchedBy: "none",
+    };
+  }
+
+  const [exactRows] = await pool.query(
+    "SELECT enccode, hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1",
     [enccode],
   );
-  return rows?.[0]?.hpercode || "";
+
+  if (exactRows.length > 0) {
+    return {
+      enccode: exactRows[0].enccode || enccode,
+      hpercode: exactRows[0].hpercode || "",
+      toecode: exactRows[0].toecode || "",
+      matchedBy: "exact",
+    };
+  }
+
+  const baseEnccode = enccode.split("/")[0];
+  const [prefixRows] = await pool.query(
+    "SELECT enccode, hpercode, toecode FROM henctr WHERE enccode LIKE CONCAT(?, '/%') LIMIT 1",
+    [baseEnccode],
+  );
+
+  if (prefixRows.length > 0) {
+    return {
+      enccode: prefixRows[0].enccode || enccode,
+      hpercode: prefixRows[0].hpercode || "",
+      toecode: prefixRows[0].toecode || "",
+      matchedBy: "prefix",
+    };
+  }
+
+  return {
+    enccode,
+    hpercode: "",
+    toecode: "",
+    matchedBy: "none",
+  };
+}
+
+async function resolveHpercode(enccode) {
+  const record = await resolveEncounterRecord(enccode);
+  return record.hpercode;
 }
 
 async function hasRecordByEnccode({ table, enccode, where = "", params = [] }) {
@@ -44,48 +87,6 @@ async function hasRecordByHpercode({ table, hpercode, where = "", params = [] })
   const sql = `SELECT 1 FROM ${table} WHERE hpercode = ?${where} LIMIT 1`;
   const [rows] = await pool.query(sql, [hpercode, ...params]);
   return rows.length > 0;
-}
-
-/**
- * Check if admission vital signs exist for an encounter
- */
-async function checkAdmissionVitalSigns(enccode, hpercode = "") {
-  try {
-    const foundByEnccode = await hasRecordByEnccode({
-      table: "hvitalsign",
-      enccode,
-    });
-    if (foundByEnccode) return true;
-
-    return await hasRecordByHpercode({
-      table: "hvitalsign",
-      hpercode,
-    });
-  } catch (error) {
-    console.error("Error checking admission vital signs:", error);
-    throw error;
-  }
-}
-
-/**
- * Check if admission BMI exists for an encounter
- */
-async function checkAdmissionBMI(enccode, hpercode = "") {
-  try {
-    const foundByEnccode = await hasRecordByEnccode({
-      table: "hvsothr",
-      enccode,
-    });
-    if (foundByEnccode) return true;
-
-    return await hasRecordByHpercode({
-      table: "hvsothr",
-      hpercode,
-    });
-  } catch (error) {
-    console.error("Error checking admission BMI:", error);
-    throw error;
-  }
 }
 
 /**
@@ -489,23 +490,18 @@ async function checkPhicStatus(enccode) {
 async function validateAdmission(req, res, next) {
   try {
     const { enccode } = req.params;
-    
-    // Check if enccode exists in master table
-    const [enccodeCheck] = await pool.query(
-      "SELECT hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1",
-      [enccode]
-    );
-    const hpercode = enccodeCheck?.[0]?.hpercode || "";
-    const toecode = enccodeCheck?.[0]?.toecode || "";
-    
-    console.log(`[ADMISSION DEBUG] Processing enccode=${enccode}, found=${enccodeCheck.length > 0}, hpercode=${hpercode}, toecode=${toecode}`);
+    const encounter = await resolveEncounterRecord(enccode);
+    const hpercode = encounter.hpercode;
+    const toecode = encounter.toecode;
+
+    console.log(`[ADMISSION DEBUG] Processing enccode=${enccode}, resolvedEnccode=${encounter.enccode}, matchedBy=${encounter.matchedBy}, hpercode=${hpercode}, toecode=${toecode}`);
 
     // Check sample table for debugging
     let sampleVitalSigns = null;
     try {
       const [vitalSignsSample] = await pool.query(
         "SELECT enccode, hpercode FROM hvitalsign WHERE enccode = ? LIMIT 1",
-        [enccode]
+        [encounter.enccode]
       );
       sampleVitalSigns = vitalSignsSample.length > 0 ? vitalSignsSample[0] : null;
     } catch (e) {
@@ -513,26 +509,26 @@ async function validateAdmission(req, res, next) {
     }
 
     const results = {
-      enccode,
-      vitalSigns: await checkAdmissionVitalSigns(enccode, hpercode),
-      bmi: await checkAdmissionBMI(enccode, hpercode),
-      historyGDPPR: await checkAdmissionHistory(enccode, "GDPPR", hpercode),
-      historyCOMPL: await checkAdmissionHistory(enccode, "COMPL", hpercode),
-      historyPRHIS: await checkAdmissionHistory(enccode, "PRHIS", hpercode),
-      historyPAHIS: await checkAdmissionHistory(enccode, "PAHIS", hpercode),
-      historyOCENV: await checkAdmissionHistory(enccode, "OCENV", hpercode),
-      historyFAHIS: await checkAdmissionHistory(enccode, "FAHIS", hpercode),
-      historyDRTHE: await checkAdmissionHistory(enccode, "DRTHE", hpercode),
-      historyALCOH: await checkAdmissionHistory(enccode, "ALCOH", hpercode),
-      historyTOBAC: await checkAdmissionHistory(enccode, "TOBAC", hpercode),
-      historyDRUGA: await checkAdmissionHistory(enccode, "DRUGA", hpercode),
-      historyOTHAL: await checkAdmissionHistory(enccode, "OTHAL", hpercode),
-      historyOB: await checkAdmissionHistoryOB(enccode, hpercode),
-      prenatal: await checkAdmissionPrenatal(enccode, hpercode),
-      pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(enccode, hpercode),
-      physicalExam: await checkAdmissionPhysicalExam(enccode, hpercode),
-      systemReview: await checkAdmissionSystemReview(enccode, hpercode),
-      courseWard: await checkAdmissionCourseWard(enccode, hpercode),
+      enccode: encounter.enccode,
+      vitalSigns: await checkAdmissionVitalSigns(encounter.enccode, hpercode),
+      bmi: await checkAdmissionBMI(encounter.enccode, hpercode),
+      historyGDPPR: await checkAdmissionHistory(encounter.enccode, "GDPPR", hpercode),
+      historyCOMPL: await checkAdmissionHistory(encounter.enccode, "COMPL", hpercode),
+      historyPRHIS: await checkAdmissionHistory(encounter.enccode, "PRHIS", hpercode),
+      historyPAHIS: await checkAdmissionHistory(encounter.enccode, "PAHIS", hpercode),
+      historyOCENV: await checkAdmissionHistory(encounter.enccode, "OCENV", hpercode),
+      historyFAHIS: await checkAdmissionHistory(encounter.enccode, "FAHIS", hpercode),
+      historyDRTHE: await checkAdmissionHistory(encounter.enccode, "DRTHE", hpercode),
+      historyALCOH: await checkAdmissionHistory(encounter.enccode, "ALCOH", hpercode),
+      historyTOBAC: await checkAdmissionHistory(encounter.enccode, "TOBAC", hpercode),
+      historyDRUGA: await checkAdmissionHistory(encounter.enccode, "DRUGA", hpercode),
+      historyOTHAL: await checkAdmissionHistory(encounter.enccode, "OTHAL", hpercode),
+      historyOB: await checkAdmissionHistoryOB(encounter.enccode, hpercode),
+      prenatal: await checkAdmissionPrenatal(encounter.enccode, hpercode),
+      pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(encounter.enccode, hpercode),
+      physicalExam: await checkAdmissionPhysicalExam(encounter.enccode, hpercode),
+      systemReview: await checkAdmissionSystemReview(encounter.enccode, hpercode),
+      courseWard: await checkAdmissionCourseWard(encounter.enccode, hpercode),
     };
 
     // Check if all required fields are completed
@@ -572,15 +568,17 @@ async function validateAdmission(req, res, next) {
       DEBUG_INFO: {
         timestamp: new Date().toISOString(),
         enccode,
+        resolvedEnccode: encounter.enccode,
+        matchedBy: encounter.matchedBy,
         hpercode,
         toecode,
-        encounterExists: enccodeCheck.length > 0,
+        encounterExists: encounter.matchedBy !== "none",
         sampleVitalSignsFound: sampleVitalSigns !== null,
         sampleVitalSignsData: sampleVitalSigns,
         totalChecks: Object.keys(results).length - 1,
         passedChecks: Object.values(results).filter(v => v === true).length,
         failedChecks: Object.values(results).filter(v => v === false).length,
-        note: "If encounterExists=false, enccode not found in henctr. If sampleVitalSignsFound=false, hvitalsign has no data for this enccode.",
+        note: "If matchedBy=prefix, the input enccode was a base code and the stored enccode includes a timestamp suffix.",
       },
     });
   } catch (error) {
@@ -596,13 +594,14 @@ async function validateAdmission(req, res, next) {
 async function validateDischarge(req, res, next) {
   try {
     const { enccode } = req.params;
+    const encounter = await resolveEncounterRecord(enccode);
 
-    console.log(`[DISCHARGE DEBUG] Processing enccode=${enccode}`);
+    console.log(`[DISCHARGE DEBUG] Processing enccode=${enccode}, resolvedEnccode=${encounter.enccode}, matchedBy=${encounter.matchedBy}`);
 
-    const dischargeOrder = await checkDischargeOrder(enccode);
-    const finalDiagnosis = await checkFinalDiagnosis(enccode);
-    const icdCode = await checkICDCode(enccode);
-    const courseInWard = await checkCourseInTheWardDischarge(enccode);
+    const dischargeOrder = await checkDischargeOrder(encounter.enccode);
+    const finalDiagnosis = await checkFinalDiagnosis(encounter.enccode);
+    const icdCode = await checkICDCode(encounter.enccode);
+    const courseInWard = await checkCourseInTheWardDischarge(encounter.enccode);
 
     const results = {
       enccode,
@@ -638,11 +637,13 @@ async function validateDischarge(req, res, next) {
       DEBUG_INFO: {
         timestamp: new Date().toISOString(),
         enccode,
+        resolvedEnccode: encounter.enccode,
+        matchedBy: encounter.matchedBy,
         dischargeOrderFound: !!dischargeOrder,
         finalDiagnosisFound: !!finalDiagnosis,
         icdCodeFound: !!icdCode,
         courseInWardStatus: courseInWard,
-        queryDetails: "Checking discharge order, final diagnosis, ICD code, and course in ward",
+        queryDetails: "Checking discharge order, final diagnosis, ICD code, and course in ward using resolved enccode",
       },
     });
   } catch (error) {
@@ -658,23 +659,16 @@ async function validateDischarge(req, res, next) {
 async function getValidationDetails(req, res, next) {
   try {
     const { enccode } = req.params;
-    
-    // Check if enccode exists in master table
-    const [enccodeCheck] = await pool.query(
-      "SELECT hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1",
-      [enccode]
-    );
-    const hpercode = enccodeCheck?.[0]?.hpercode || "";
-    const toecode = enccodeCheck?.[0]?.toecode || "";
+    const encounter = await resolveEncounterRecord(enccode);
+    const hpercode = encounter.hpercode;
 
-    console.log(`[DETAILS DEBUG] Processing enccode=${enccode}, found=${enccodeCheck.length > 0}, hpercode=${hpercode}, toecode=${toecode}`);
+    console.log(`[DETAILS DEBUG] Processing enccode=${enccode}, resolvedEnccode=${encounter.enccode}, matchedBy=${encounter.matchedBy}, hpercode=${hpercode}, toecode=${encounter.toecode}`);
 
-    // Check sample table for debugging
     let sampleVitalSigns = null;
     try {
       const [vitalSignsSample] = await pool.query(
         "SELECT enccode, hpercode FROM hvitalsign WHERE enccode = ? LIMIT 1",
-        [enccode]
+        [encounter.enccode]
       );
       sampleVitalSigns = vitalSignsSample.length > 0 ? vitalSignsSample[0] : null;
     } catch (e) {
@@ -683,35 +677,35 @@ async function getValidationDetails(req, res, next) {
 
     const allValidations = {
       admission: {
-        vitalSigns: await checkAdmissionVitalSigns(enccode, hpercode),
-        bmi: await checkAdmissionBMI(enccode, hpercode),
+        vitalSigns: await checkAdmissionVitalSigns(encounter.enccode, hpercode),
+        bmi: await checkAdmissionBMI(encounter.enccode, hpercode),
         histories: {
-          GDPPR: await checkAdmissionHistory(enccode, "GDPPR", hpercode),
-          COMPL: await checkAdmissionHistory(enccode, "COMPL", hpercode),
-          PRHIS: await checkAdmissionHistory(enccode, "PRHIS", hpercode),
-          PAHIS: await checkAdmissionHistory(enccode, "PAHIS", hpercode),
-          OCENV: await checkAdmissionHistory(enccode, "OCENV", hpercode),
-          FAHIS: await checkAdmissionHistory(enccode, "FAHIS", hpercode),
-          DRTHE: await checkAdmissionHistory(enccode, "DRTHE", hpercode),
-          ALCOH: await checkAdmissionHistory(enccode, "ALCOH", hpercode),
-          TOBAC: await checkAdmissionHistory(enccode, "TOBAC", hpercode),
-          DRUGA: await checkAdmissionHistory(enccode, "DRUGA", hpercode),
-          OTHAL: await checkAdmissionHistory(enccode, "OTHAL", hpercode),
+          GDPPR: await checkAdmissionHistory(encounter.enccode, "GDPPR", hpercode),
+          COMPL: await checkAdmissionHistory(encounter.enccode, "COMPL", hpercode),
+          PRHIS: await checkAdmissionHistory(encounter.enccode, "PRHIS", hpercode),
+          PAHIS: await checkAdmissionHistory(encounter.enccode, "PAHIS", hpercode),
+          OCENV: await checkAdmissionHistory(encounter.enccode, "OCENV", hpercode),
+          FAHIS: await checkAdmissionHistory(encounter.enccode, "FAHIS", hpercode),
+          DRTHE: await checkAdmissionHistory(encounter.enccode, "DRTHE", hpercode),
+          ALCOH: await checkAdmissionHistory(encounter.enccode, "ALCOH", hpercode),
+          TOBAC: await checkAdmissionHistory(encounter.enccode, "TOBAC", hpercode),
+          DRUGA: await checkAdmissionHistory(encounter.enccode, "DRUGA", hpercode),
+          OTHAL: await checkAdmissionHistory(encounter.enccode, "OTHAL", hpercode),
         },
-        ob: await checkAdmissionHistoryOB(enccode, hpercode),
-        prenatal: await checkAdmissionPrenatal(enccode, hpercode),
-        pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(enccode, hpercode),
-        physicalExam: await checkAdmissionPhysicalExam(enccode, hpercode),
-        systemReview: await checkAdmissionSystemReview(enccode, hpercode),
-        courseWard: await checkAdmissionCourseWard(enccode, hpercode),
+        ob: await checkAdmissionHistoryOB(encounter.enccode, hpercode),
+        prenatal: await checkAdmissionPrenatal(encounter.enccode, hpercode),
+        pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(encounter.enccode, hpercode),
+        physicalExam: await checkAdmissionPhysicalExam(encounter.enccode, hpercode),
+        systemReview: await checkAdmissionSystemReview(encounter.enccode, hpercode),
+        courseWard: await checkAdmissionCourseWard(encounter.enccode, hpercode),
       },
       discharge: {
-        order: await checkDischargeOrder(enccode),
-        finalDiagnosis: await checkFinalDiagnosis(enccode),
-        icdCode: await checkICDCode(enccode),
-        courseInWard: await checkCourseInTheWardDischarge(enccode),
+        order: await checkDischargeOrder(encounter.enccode),
+        finalDiagnosis: await checkFinalDiagnosis(encounter.enccode),
+        icdCode: await checkICDCode(encounter.enccode),
+        courseInWard: await checkCourseInTheWardDischarge(encounter.enccode),
       },
-      phic: await checkPhicStatus(enccode),
+      phic: await checkPhicStatus(encounter.enccode),
     };
 
     const admissionPassed = Object.values(allValidations.admission)
@@ -729,15 +723,17 @@ async function getValidationDetails(req, res, next) {
       DEBUG_INFO: {
         timestamp: new Date().toISOString(),
         enccode,
+        resolvedEnccode: encounter.enccode,
+        matchedBy: encounter.matchedBy,
         hpercode,
-        toecode,
-        encounterExists: enccodeCheck.length > 0,
+        toecode: encounter.toecode,
+        encounterExists: encounter.matchedBy !== "none",
         sampleVitalSignsFound: sampleVitalSigns !== null,
         sampleVitalSignsData: sampleVitalSigns,
         admissionChecksPassed: admissionPassed,
         dischargeChecksPassed: dischargePassed,
         phicStatus: allValidations.phic,
-        note: "If encounterExists=false, enccode not found in henctr. If sampleVitalSignsFound=false, hvitalsign has no data for this enccode.",
+        note: "If matchedBy=prefix, the input enccode was resolved to the stored timestamp-suffixed enccode.",
       },
     });
   } catch (error) {
