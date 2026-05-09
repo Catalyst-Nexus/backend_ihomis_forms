@@ -59,7 +59,8 @@ const labUploadMulter = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
   fileFilter: (req, file, cb) => {
     const fileName = String(file.originalname || "").toLowerCase();
-    const isPdf = file.mimetype === "application/pdf" || fileName.endsWith(".pdf");
+    const isPdf =
+      file.mimetype === "application/pdf" || fileName.endsWith(".pdf");
 
     if (isPdf) {
       cb(null, true);

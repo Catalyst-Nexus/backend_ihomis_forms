@@ -376,7 +376,9 @@ async function registerLabResultUpload(req, res, next) {
       return res.status(400).json({ ok: false, message: "orcode is required" });
     }
     if (!proccode) {
-      return res.status(400).json({ ok: false, message: "proccode is required" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "proccode is required" });
     }
 
     // ── 2. Validate patient in MySQL ─────────────────────────────
