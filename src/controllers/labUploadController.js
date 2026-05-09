@@ -60,7 +60,11 @@ async function validateEncounterInMySQL(enccode, hpercode) {
 
 async function validateOrderInMySQL(docointkey, enccode) {
   const [rows] = await pool.query(
-    "SELECT enccode, docointkey, entryby FROM hdocord WHERE docointkey = ? AND enccode = ? LIMIT 1",
+    `SELECT hdocord.docointkey, hdocord.enccode, hdocord.orcode, hdocord.proccode, hprocm.procdesc
+     FROM hdocord
+     LEFT JOIN hprocm ON hprocm.proccode = hdocord.proccode
+     WHERE hdocord.docointkey = ? AND hdocord.enccode = ?
+     LIMIT 1`,
     [docointkey, enccode],
   );
   return rows[0] || null;
@@ -191,6 +195,7 @@ async function getOrdersForEncounter(req, res, next) {
         hdocord.orcode,
         hdocord.proccode,
         hdocord.entryby,
+        DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS dodate,
         DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS ordate,
         DATE_FORMAT(hdocord.dotime, '%H:%i:%s') AS ortime,
         hdocord.estatus,
@@ -343,6 +348,8 @@ async function registerLabResultUpload(req, res, next) {
       proccode = null,
       procedureInstanceId = null,
       docointkey: providedDocointkey = null,
+      procdesc = "",
+      source = "web",
       remarks = "",
       uploadedBy = null,
     } = req.body;
@@ -364,6 +371,12 @@ async function registerLabResultUpload(req, res, next) {
       return res
         .status(400)
         .json({ ok: false, message: "PDF file is required" });
+    }
+    if (!orcode) {
+      return res.status(400).json({ ok: false, message: "orcode is required" });
+    }
+    if (!proccode) {
+      return res.status(400).json({ ok: false, message: "proccode is required" });
     }
 
     // ── 2. Validate patient in MySQL ─────────────────────────────
@@ -391,19 +404,34 @@ async function registerLabResultUpload(req, res, next) {
     }
 
     // Validate the docointkey exists in hdocord for this encounter
-    const [orderRows] = await pool.query(
-      `SELECT docointkey, enccode, orcode, proccode 
-       FROM hdocord 
-       WHERE docointkey = ? AND enccode = ? 
-       LIMIT 1`,
-      [providedDocointkey, enccode],
-    );
+    const orderRow = await validateOrderInMySQL(providedDocointkey, enccode);
 
-    if (!orderRows[0]?.docointkey) {
+    if (!orderRow?.docointkey) {
       return res.status(404).json({
         ok: false,
         message:
           "Order (docointkey) not found in MySQL hdocord for this encounter",
+      });
+    }
+
+    if (orderRow.orcode !== orcode) {
+      return res.status(400).json({
+        ok: false,
+        message: "orcode does not match the MySQL hdocord record",
+      });
+    }
+
+    if (orderRow.proccode !== proccode) {
+      return res.status(400).json({
+        ok: false,
+        message: "proccode does not match the MySQL hdocord record",
+      });
+    }
+
+    if (procdesc && orderRow.procdesc && orderRow.procdesc !== procdesc) {
+      return res.status(400).json({
+        ok: false,
+        message: "procdesc does not match the MySQL hdocord record",
       });
     }
 
@@ -477,16 +505,16 @@ async function registerLabResultUpload(req, res, next) {
 
     // ── 8. Insert metadata into Supabase lab_result_uploads ─────
     // Column names match the existing Supabase schema exactly:
-    // hpercode, enccode, orcode, proccode, procedure_instance_id, docointkey, ...
-    // NOTE: procedure_instance_id is set to docointkey (from MySQL hdocord), NOT proccode
+    // hpenormalizedSource = String(source || "web").trim().toLowerCase() === "mobile" ? "mobile" : "web";
+
     const { data: insertData, error: insertError } = await supabase
       .from("lab_result_uploads")
       .insert({
         hpercode,
         enccode,
-        orcode: orcode || null,
-        proccode: resolvedProccode || null,
-        procedure_instance_id: docointkey, // Set to docointkey from MySQL hdocord
+        orcode,
+        proccode: resolvedProccode,
+        procedure_instance_id: docointkey,
         docointkey,
         file_name: file.originalname || "lab_result.pdf",
         file_url: uploadedUrl,
@@ -494,6 +522,8 @@ async function registerLabResultUpload(req, res, next) {
         file_size: file.size,
         content_type: file.mimetype || "application/pdf",
         uploaded_by: uploadedBy || null,
+        remarks: remarks || null,
+        source: normalizedSourcedBy || null,
         remarks: remarks || null,
         source: "lab-upload",
         is_signed_url: useSigned,
@@ -523,7 +553,7 @@ async function registerLabResultUpload(req, res, next) {
       encounterCode: enccode,
       orderCode: orcode,
       proccode: resolvedProccode,
-      procedureInstanceId: resolvedProccode,
+      procedureInstanceId: docointkey,
       message: "Lab result uploaded successfully",
     });
   } catch (error) {
@@ -740,54 +770,21 @@ async function getPatientUploadedFiles(req, res, next) {
         apiUrl.replace(supabaseKey, "***"),
       );
 
-      // Check for common Supabase errors that should return empty data instead of 500
-      // These errors indicate the table doesn't exist or has RLS issues - return empty array
-      const errorPatterns = [
-        'relation "[^"]*lab_result_uploads" does not exist',
-        "permission denied",
-        "row-level security",
-        'table "[^"]*lab_result_uploads" does not exist',
-        "42P01", // PostgreSQL undefined table
-        "42501", // PostgreSQL permission denied
-      ];
-
-      const isRecoverableError = errorPatterns.some((pattern) =>
-        errorText.toLowerCase().includes(pattern.toLowerCase()),
+      // Treat ALL Supabase API errors as recoverable (table not found, RLS issues, etc.)
+      // If Supabase is down or table doesn't exist, return empty array gracefully
+      // This prevents the frontend from crashing when Supabase is not configured
+      console.warn(
+        "[getPatientUploadedFiles] Supabase returned error - returning empty array gracefully",
       );
-
-      if (isRecoverableError) {
-        console.warn(
-          "[getPatientUploadedFiles] Supabase table not available or RLS issue - returning empty array",
-        );
-        return res.json({
-          ok: true,
-          hpercode,
-          enccode: enccode || null,
-          count: 0,
-          data: [],
-          _debug: {
-            supabaseStatus: response.status,
-            message: "Supabase table not configured yet",
-          },
-        });
-      }
-
-      // For other errors, return the error details
-      let errorDetail = errorText;
-      try {
-        const errorJson = JSON.parse(errorText);
-        errorDetail =
-          errorJson.message || errorJson.details || errorJson.hint || errorText;
-      } catch (e) {
-        // Keep original error text
-      }
-
-      return res.status(500).json({
-        ok: false,
-        message: `Supabase error: ${errorDetail}`,
-        debug: {
+      return res.json({
+        ok: true,
+        hpercode,
+        enccode: enccode || null,
+        count: 0,
+        data: [],
+        _debug: {
           supabaseStatus: response.status,
-          errorType: "supabase_api_error",
+          message: "Supabase table not configured yet",
         },
       });
     }

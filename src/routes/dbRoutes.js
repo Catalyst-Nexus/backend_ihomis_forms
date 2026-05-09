@@ -58,10 +58,10 @@ const labUploadMulter = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
   fileFilter: (req, file, cb) => {
-    if (
-      file.mimetype === "application/pdf" ||
-      file.mimetype.startsWith("application/")
-    ) {
+    const fileName = String(file.originalname || "").toLowerCase();
+    const isPdf = file.mimetype === "application/pdf" || fileName.endsWith(".pdf");
+
+    if (isPdf) {
       cb(null, true);
     } else {
       cb(new Error("Only PDF files are allowed"), false);
