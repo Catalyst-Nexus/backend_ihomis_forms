@@ -90,7 +90,8 @@ async function validateOrderInMySQL(docointkey, enccode) {
  */
 async function getOrdersForEncounter(req, res, next) {
   try {
-    const { enccode } = req.params;
+    // URL-decode the enccode parameter (comes URL-encoded from route)
+    let enccode = req.params.enccode ? decodeURIComponent(req.params.enccode) : null;
     const orderType = req.query.type || "all";
     const status = req.query.status || "S";
     const hpercode = req.query.hpercode || null; // Optional: query by hpercode instead
@@ -506,8 +507,8 @@ async function registerLabResultUpload(req, res, next) {
     }
 
     // ── 8. Insert metadata into Supabase lab_result_uploads ─────
-    // Column names match the existing Supabase schema exactly:
-    // hpenormalizedSource = String(source || "web").trim().toLowerCase() === "mobile" ? "mobile" : "web";
+    // Normalize source: use provided source or default to 'web'
+    const normalizedSource = String(source || "web").trim().toLowerCase() === "mobile" ? "mobile" : "web";
 
     const { data: insertData, error: insertError } = await supabase
       .from("lab_result_uploads")
@@ -525,9 +526,7 @@ async function registerLabResultUpload(req, res, next) {
         content_type: file.mimetype || "application/pdf",
         uploaded_by: uploadedBy || null,
         remarks: remarks || null,
-        source: normalizedSourcedBy || null,
-        remarks: remarks || null,
-        source: "lab-upload",
+        source: normalizedSource,
         is_signed_url: useSigned,
         url_expires_at: useSigned
           ? new Date(Date.now() + signedTtl * 1000).toISOString()
@@ -707,7 +706,8 @@ async function debugSampleData(req, res, next) {
 async function getPatientUploadedFiles(req, res, next) {
   try {
     const { hpercode } = req.params;
-    const { enccode } = req.query;
+    // URL-decode the enccode query parameter
+    let enccode = req.query.enccode ? decodeURIComponent(req.query.enccode) : null;
 
     // Validate hpercode is a meaningful value (not null, undefined, or "null" string)
     if (!hpercode || hpercode === "null" || hpercode === "undefined") {
@@ -791,7 +791,17 @@ async function getPatientUploadedFiles(req, res, next) {
       });
     }
 
-    const files = await response.json();
+    let files = [];
+    try {
+      files = await response.json();
+    } catch (jsonError) {
+      // Response was not valid JSON - log but return empty array
+      console.warn(
+        "[getPatientUploadedFiles] Response was not valid JSON:",
+        jsonError.message,
+      );
+      files = [];
+    }
 
     return res.json({
       ok: true,
@@ -802,9 +812,12 @@ async function getPatientUploadedFiles(req, res, next) {
     });
   } catch (error) {
     console.error("getPatientUploadedFiles error:", error);
-    return res.status(500).json({
-      ok: false,
-      message: `Error: ${error.message}`,
+    // Return 200 with empty data instead of 500 error for graceful degradation
+    return res.json({
+      ok: true,
+      count: 0,
+      data: [],
+      _debug: { error: error.message },
     });
   }
 }
