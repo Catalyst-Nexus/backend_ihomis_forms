@@ -448,7 +448,15 @@ async function registerLabResultUpload(req, res, next) {
     const resolvedProccode = proccode || procedureInstanceId || null;
 
     // ── 6. Get Supabase client ────────────────────────────────────
-    const supabase = getSupabaseAdmin();
+    let supabase;
+    try {
+      supabase = getSupabaseAdmin();
+    } catch (configError) {
+      return res.status(500).json({
+        ok: false,
+        message: configError.message,
+      });
+    }
 
     // ── 7. Upload PDF to Supabase Storage ───────────────────────
     const bucketName =
