@@ -677,10 +677,18 @@ async function getPatientUploadedFiles(req, res, next) {
     const { hpercode } = req.params;
     const { enccode } = req.query;
 
-    if (!hpercode) {
-      return res.status(400).json({
-        ok: false,
-        message: "hpercode is required",
+    // Validate hpercode is a meaningful value (not null, undefined, or "null" string)
+    if (!hpercode || hpercode === "null" || hpercode === "undefined") {
+      // Return empty array instead of error - this is recoverable and expected
+      return res.json({
+        ok: true,
+        hpercode: hpercode || null,
+        enccode: enccode || null,
+        count: 0,
+        data: [],
+        _debug: {
+          reason: "Invalid or missing hpercode",
+        },
       });
     }
 
