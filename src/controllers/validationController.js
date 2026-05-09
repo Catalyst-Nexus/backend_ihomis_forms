@@ -90,6 +90,48 @@ async function hasRecordByHpercode({ table, hpercode, where = "", params = [] })
 }
 
 /**
+ * Check if admission vital signs exist for an encounter
+ */
+async function checkAdmissionVitalSigns(enccode, hpercode = "") {
+  try {
+    const foundByEnccode = await hasRecordByEnccode({
+      table: "hvitalsign",
+      enccode,
+    });
+    if (foundByEnccode) return true;
+
+    return await hasRecordByHpercode({
+      table: "hvitalsign",
+      hpercode,
+    });
+  } catch (error) {
+    console.error("Error checking admission vital signs:", error);
+    throw error;
+  }
+}
+
+/**
+ * Check if admission BMI exists for an encounter
+ */
+async function checkAdmissionBMI(enccode, hpercode = "") {
+  try {
+    const foundByEnccode = await hasRecordByEnccode({
+      table: "hvsothr",
+      enccode,
+    });
+    if (foundByEnccode) return true;
+
+    return await hasRecordByHpercode({
+      table: "hvsothr",
+      hpercode,
+    });
+  } catch (error) {
+    console.error("Error checking admission BMI:", error);
+    throw error;
+  }
+}
+
+/**
  * Check if admission history exists for a specific history type
  */
 async function checkAdmissionHistory(enccode, histype, hpercode = "") {
