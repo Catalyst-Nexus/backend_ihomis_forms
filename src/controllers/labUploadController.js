@@ -302,7 +302,9 @@ async function getOrdersForEncounter(req, res, next) {
 
     return res.json({
       ok: true,
-      enccode: enccode || null,
+      // Return both short and full enccode for consistency
+      enccode: enccode || null,  // Original short enccode from request
+      enccodeFull: resolvedEnccode || enccode || null,  // Full hdocord enccode
       hpercode: hpercode || null,
       orderType,
       count: rows.length,
@@ -312,6 +314,7 @@ async function getOrdersForEncounter(req, res, next) {
         queryByPatient,
         enccodeLength: enccode ? enccode.length : 0,
         hpercodeLength: hpercode ? hpercode.length : 0,
+        resolvedEnccode: resolvedEnccode,
       }
     });
   } catch (error) {
