@@ -40,32 +40,6 @@ function getSupabaseAdmin() {
   return _supabaseAdmin;
 }
 
-/**
- * Generate a unique docointkey.
- * Format: LR{YYYYMMDD}{seq}  e.g. LR2026050600001
- * Queries the existing lab_result_uploads table in Supabase for the next seq.
- */
-async function generateDocointkey(supabase) {
-  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const prefix = `LR${today}`;
-
-  const { data, error } = await supabase
-    .from("lab_result_uploads")
-    .select("docointkey")
-    .like("docointkey", `${prefix}%`)
-    .order("docointkey", { ascending: false })
-    .limit(1);
-
-  let nextSeq = 1;
-  if (!error && data && data.length > 0) {
-    const lastKey = data[0].docointkey || "";
-    const lastSeq = parseInt(lastKey.replace(prefix, ""), 10);
-    nextSeq = isNaN(lastSeq) ? 1 : lastSeq + 1;
-  }
-
-  return `${prefix}${String(nextSeq).padStart(5, "0")}`;
-}
-
 // ── MySQL validation helpers ────────────────────────────────────
 
 async function validatePatientInMySQL(hpercode) {
@@ -101,13 +75,13 @@ async function validateOrderInMySQL(docointkey, enccode) {
  * Query params:
  *   - type: 'lab' | 'rad' | 'all' (default: 'all')
  *   - status: order estatus filter (default: 'S')
- * 
+ *
  * orcode values in hdocord:
  *   - LABOR = Laboratory orders
  *   - RADIO = Radiology orders
  *   - DISCH = Discharge orders
  *   - DIETT = Diet orders
- * 
+ *
  * proccode is joined with hprocm to get procdesc (procedure description)
  */
 async function getOrdersForEncounter(req, res, next) {
@@ -123,7 +97,9 @@ async function getOrdersForEncounter(req, res, next) {
         .json({ ok: false, message: "enccode or hpercode is required" });
     }
 
-    console.log(`[getOrdersForEncounter] enccode: "${enccode}", hpercode: "${hpercode}", type: ${orderType}, status: ${status}`);
+    console.log(
+      `[getOrdersForEncounter] enccode: "${enccode}", hpercode: "${hpercode}", type: ${orderType}, status: ${status}`,
+    );
 
     // Build type filter based on orcode column
     // LABOR = Lab, RADIO = Radiology
@@ -138,21 +114,24 @@ async function getOrdersForEncounter(req, res, next) {
 
     // Handle status filter - support both "all" and specific statuses
     // Note: estatus values in the database are 'U', null, etc.
-    const applyStatusFilter = status && status !== "all" && status.trim() !== "";
-    
+    const applyStatusFilter =
+      status && status !== "all" && status.trim() !== "";
+
     // Determine query approach: by enccode or by hpercode
     let queryByEncounter = false;
     let queryByPatient = false;
     let resolvedEnccode = enccode; // Use the full enccode for hdocord
-    
+
     if (enccode) {
       // First try by enccode directly
       const [checkByEnc] = await pool.query(
         `SELECT COUNT(*) as total FROM hdocord WHERE enccode = ?`,
-        [enccode]
+        [enccode],
       );
-      console.log(`[getOrdersForEncounter] hdocord records for enccode "${enccode}": ${checkByEnc[0]?.total}`);
-      
+      console.log(
+        `[getOrdersForEncounter] hdocord records for enccode "${enccode}": ${checkByEnc[0]?.total}`,
+      );
+
       if (checkByEnc[0]?.total > 0) {
         queryByEncounter = true;
       } else {
@@ -161,16 +140,18 @@ async function getOrdersForEncounter(req, res, next) {
         // Example: 000502700000000000296104/18/202510:07:32
         const [fullEncMatch] = await pool.query(
           `SELECT enccode FROM hdocord WHERE enccode LIKE ? LIMIT 1`,
-          [`${enccode}%`]
+          [`${enccode}%`],
         );
         if (fullEncMatch[0]?.enccode) {
-          console.log(`[getOrdersForEncounter] Found full enccode: "${fullEncMatch[0].enccode}" for short: "${enccode}"`);
+          console.log(
+            `[getOrdersForEncounter] Found full enccode: "${fullEncMatch[0].enccode}" for short: "${enccode}"`,
+          );
           resolvedEnccode = fullEncMatch[0].enccode;
           queryByEncounter = true;
         }
       }
     }
-    
+
     // If no records by enccode, try by hpercode
     if (!queryByEncounter && hpercode) {
       // Get hpercode from henctr if not provided
@@ -178,28 +159,30 @@ async function getOrdersForEncounter(req, res, next) {
       if (enccode) {
         const [encRows] = await pool.query(
           `SELECT hpercode FROM henctr WHERE enccode = ? LIMIT 1`,
-          [enccode]
+          [enccode],
         );
         if (encRows[0]?.hpercode) {
           resolvedHpercode = encRows[0].hpercode;
         }
       }
-      
+
       if (resolvedHpercode) {
         const [checkByPat] = await pool.query(
           `SELECT COUNT(*) as total FROM hdocord 
            INNER JOIN henctr ON henctr.enccode = hdocord.enccode
            WHERE henctr.hpercode = ?`,
-          [resolvedHpercode]
+          [resolvedHpercode],
         );
-        console.log(`[getOrdersForEncounter] hdocord records for hpercode "${resolvedHpercode}": ${checkByPat[0]?.total}`);
-        
+        console.log(
+          `[getOrdersForEncounter] hdocord records for hpercode "${resolvedHpercode}": ${checkByPat[0]?.total}`,
+        );
+
         if (checkByPat[0]?.total > 0) {
           queryByPatient = true;
         }
       }
     }
-    
+
     let rows = [];
     const baseSelect = `
       SELECT
@@ -217,7 +200,7 @@ async function getOrdersForEncounter(req, res, next) {
         hperson.patmiddle,
         hprocm.procdesc
     `;
-    
+
     if (queryByEncounter) {
       // Query by enccode - use resolvedEnccode (full enccode from hdocord)
       let params = [resolvedEnccode];
@@ -230,14 +213,14 @@ async function getOrdersForEncounter(req, res, next) {
          WHERE hdocord.enccode = ?
          ${typeCondition}
       `;
-      
+
       if (applyStatusFilter) {
         query += " AND hdocord.estatus = ?";
         params.push(status);
       }
-      
+
       query += ` ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC LIMIT 100`;
-      
+
       [rows] = await pool.query(query, params);
     } else if (queryByPatient) {
       // Query by hpercode - get all encounters for this patient
@@ -245,20 +228,22 @@ async function getOrdersForEncounter(req, res, next) {
       if (enccode) {
         const [encRows] = await pool.query(
           `SELECT hpercode FROM henctr WHERE enccode = ? LIMIT 1`,
-          [enccode]
+          [enccode],
         );
         if (encRows[0]?.hpercode) {
           resolvedHpercode = encRows[0].hpercode;
         }
       }
-      
+
       if (resolvedHpercode) {
         const params = [resolvedHpercode];
-        const statusCondition = applyStatusFilter ? "AND hdocord.estatus = ?" : "";
+        const statusCondition = applyStatusFilter
+          ? "AND hdocord.estatus = ?"
+          : "";
         if (applyStatusFilter) {
           params.push(status);
         }
-        
+
         [rows] = await pool.query(
           `${baseSelect}
            FROM hdocord
@@ -270,30 +255,36 @@ async function getOrdersForEncounter(req, res, next) {
            ${statusCondition}
            ORDER BY hdocord.dodate DESC, hdocord.dotime DESC, hdocord.docointkey DESC
            LIMIT 100`,
-          params
+          params,
         );
       }
     } else {
       // No records found - return empty with debug info
-      console.log(`[getOrdersForEncounter] No hdocord records found for enccode: "${enccode}"`);
-      
+      console.log(
+        `[getOrdersForEncounter] No hdocord records found for enccode: "${enccode}"`,
+      );
+
       // Check if encounter exists at all
       if (enccode) {
         const [encExists] = await pool.query(
           `SELECT enccode, hpercode FROM henctr WHERE enccode = ? LIMIT 1`,
-          [enccode]
+          [enccode],
         );
         if (encExists[0]) {
-          console.log(`[getOrdersForEncounter] Encounter exists in henctr with hpercode: "${encExists[0].hpercode}"`);
-          
+          console.log(
+            `[getOrdersForEncounter] Encounter exists in henctr with hpercode: "${encExists[0].hpercode}"`,
+          );
+
           // Check if this hpercode has ANY hdocord records
           const [patOrders] = await pool.query(
             `SELECT COUNT(*) as total FROM hdocord 
              INNER JOIN henctr ON henctr.enccode = hdocord.enccode
              WHERE henctr.hpercode = ?`,
-            [encExists[0].hpercode]
+            [encExists[0].hpercode],
           );
-          console.log(`[getOrdersForEncounter] Patient has ${patOrders[0]?.total} total hdocord records`);
+          console.log(
+            `[getOrdersForEncounter] Patient has ${patOrders[0]?.total} total hdocord records`,
+          );
         }
       }
     }
@@ -303,8 +294,8 @@ async function getOrdersForEncounter(req, res, next) {
     return res.json({
       ok: true,
       // Return both short and full enccode for consistency
-      enccode: enccode || null,  // Original short enccode from request
-      enccodeFull: resolvedEnccode || enccode || null,  // Full hdocord enccode
+      enccode: enccode || null, // Original short enccode from request
+      enccodeFull: resolvedEnccode || enccode || null, // Full hdocord enccode
       hpercode: hpercode || null,
       orderType,
       count: rows.length,
@@ -315,7 +306,7 @@ async function getOrdersForEncounter(req, res, next) {
         enccodeLength: enccode ? enccode.length : 0,
         hpercodeLength: hpercode ? hpercode.length : 0,
         resolvedEnccode: resolvedEnccode,
-      }
+      },
     });
   } catch (error) {
     console.error(`[getOrdersForEncounter] Error:`, error);
@@ -392,9 +383,10 @@ async function registerLabResultUpload(req, res, next) {
     // ── 4. Validate docointkey exists in MySQL hdocord (REQUIRED) ──
     // docointkey must come from MySQL hdocord - NEVER generate or accept fabricated keys
     if (!providedDocointkey) {
-      return res.status(400).json({ 
-        ok: false, 
-        message: "docointkey is required and must come from MySQL hdocord table" 
+      return res.status(400).json({
+        ok: false,
+        message:
+          "docointkey is required and must come from MySQL hdocord table",
       });
     }
 
@@ -404,13 +396,14 @@ async function registerLabResultUpload(req, res, next) {
        FROM hdocord 
        WHERE docointkey = ? AND enccode = ? 
        LIMIT 1`,
-      [providedDocointkey, enccode]
+      [providedDocointkey, enccode],
     );
 
     if (!orderRows[0]?.docointkey) {
-      return res.status(404).json({ 
-        ok: false, 
-        message: "Order (docointkey) not found in MySQL hdocord for this encounter" 
+      return res.status(404).json({
+        ok: false,
+        message:
+          "Order (docointkey) not found in MySQL hdocord for this encounter",
       });
     }
 
@@ -425,7 +418,10 @@ async function registerLabResultUpload(req, res, next) {
     const supabase = getSupabaseAdmin();
 
     // ── 7. Upload PDF to Supabase Storage ───────────────────────
-    const bucketName = process.env.SUPABASE_LAB_RESULTS_BUCKET || process.env.SUPABASE_LAB_BUCKET || "lab-results";
+    const bucketName =
+      process.env.SUPABASE_LAB_RESULTS_BUCKET ||
+      process.env.SUPABASE_LAB_BUCKET ||
+      "lab-results";
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const safeName = String(file.originalname || "lab_result.pdf")
       .trim()
@@ -490,7 +486,7 @@ async function registerLabResultUpload(req, res, next) {
         enccode,
         orcode: orcode || null,
         proccode: resolvedProccode || null,
-        procedure_instance_id: docointkey,  // Set to docointkey from MySQL hdocord
+        procedure_instance_id: docointkey, // Set to docointkey from MySQL hdocord
         docointkey,
         file_name: file.originalname || "lab_result.pdf",
         file_url: uploadedUrl,
@@ -546,7 +542,7 @@ async function debugSchema(req, res, next) {
        FROM INFORMATION_SCHEMA.TABLES 
        WHERE TABLE_SCHEMA = DATABASE() 
        AND TABLE_NAME IN ('hdocord', 'henctr', 'hperson', 'pcchrgcod', 'hpercode', 'hadmlog')
-       ORDER BY TABLE_NAME`
+       ORDER BY TABLE_NAME`,
     );
 
     const schemas = {};
@@ -556,15 +552,15 @@ async function debugSchema(req, res, next) {
          FROM INFORMATION_SCHEMA.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
          ORDER BY ORDINAL_POSITION`,
-        [TABLE_NAME]
+        [TABLE_NAME],
       );
       schemas[TABLE_NAME] = columns;
     }
 
     res.json({
       ok: true,
-      tables: tables.map(t => t.TABLE_NAME),
-      schemas
+      tables: tables.map((t) => t.TABLE_NAME),
+      schemas,
     });
   } catch (error) {
     return next(error);
@@ -584,7 +580,7 @@ async function debugSampleData(req, res, next) {
        WHERE orcode IS NOT NULL AND orcode != '' 
        GROUP BY orcode 
        ORDER BY count DESC 
-       LIMIT 20`
+       LIMIT 20`,
     );
 
     // Get sample hdocord rows with orcode
@@ -592,7 +588,7 @@ async function debugSampleData(req, res, next) {
       `SELECT enccode, docointkey, orcode, dodate, estatus 
        FROM hdocord 
        WHERE orcode IS NOT NULL AND orcode != '' 
-       LIMIT 10`
+       LIMIT 10`,
     );
 
     // List all tables to find one with proccode
@@ -600,7 +596,7 @@ async function debugSampleData(req, res, next) {
       `SELECT TABLE_NAME 
        FROM INFORMATION_SCHEMA.TABLES 
        WHERE TABLE_SCHEMA = DATABASE() 
-       ORDER BY TABLE_NAME`
+       ORDER BY TABLE_NAME`,
     );
 
     // Search for proccode in all tables
@@ -612,12 +608,12 @@ async function debugSampleData(req, res, next) {
          WHERE TABLE_SCHEMA = DATABASE() 
          AND TABLE_NAME = ? 
          AND COLUMN_NAME LIKE '%proc%'`,
-        [TABLE_NAME]
+        [TABLE_NAME],
       );
       if (columns.length > 0) {
         tablesWithProccode.push({
           table: TABLE_NAME,
-          columns: columns.map(c => c.COLUMN_NAME)
+          columns: columns.map((c) => c.COLUMN_NAME),
         });
       }
     }
@@ -628,7 +624,7 @@ async function debugSampleData(req, res, next) {
        FROM INFORMATION_SCHEMA.TABLES 
        WHERE TABLE_SCHEMA = DATABASE() 
        AND (TABLE_NAME LIKE '%lib%' OR TABLE_NAME LIKE '%cat%' OR TABLE_NAME LIKE '%hdl%')
-       ORDER BY TABLE_NAME`
+       ORDER BY TABLE_NAME`,
     );
 
     // Get proccode values from hdocord
@@ -638,7 +634,7 @@ async function debugSampleData(req, res, next) {
        WHERE proccode IS NOT NULL AND proccode != '' 
        GROUP BY proccode 
        ORDER BY count DESC 
-       LIMIT 20`
+       LIMIT 20`,
     );
 
     // Get procedure master list with descriptions
@@ -647,12 +643,12 @@ async function debugSampleData(req, res, next) {
        FROM hprocm 
        WHERE proccode IS NOT NULL AND proccode != '' 
        ORDER BY procdesc 
-       LIMIT 30`
+       LIMIT 30`,
     );
 
     // Get lab result library
     const [labResultLib] = await pool.query(
-      `SELECT * FROM labresultlibrary LIMIT 20`
+      `SELECT * FROM labresultlibrary LIMIT 20`,
     );
 
     res.json({
@@ -660,7 +656,7 @@ async function debugSampleData(req, res, next) {
       orcodeSummary: orcodeRows,
       sampleHdocord: sampleHdocord,
       tablesWithProcColumns: tablesWithProccode,
-      libLikeTables: libTables.map(t => t.TABLE_NAME),
+      libLikeTables: libTables.map((t) => t.TABLE_NAME),
       proccodeInHdocord: proccodeInHdocord,
       procedureMaster: procedureMaster,
       labResultLibrary: labResultLib,
@@ -672,7 +668,7 @@ async function debugSampleData(req, res, next) {
 
 /**
  * GET /api/db/patients/:hpercode/uploaded-files
- * 
+ *
  * Fetch all uploaded lab result files for a patient from Supabase.
  * Uses REST API directly to avoid JS client issues.
  */
@@ -682,9 +678,9 @@ async function getPatientUploadedFiles(req, res, next) {
     const { enccode } = req.query;
 
     if (!hpercode) {
-      return res.status(400).json({ 
-        ok: false, 
-        message: "hpercode is required" 
+      return res.status(400).json({
+        ok: false,
+        message: "hpercode is required",
       });
     }
 
@@ -692,43 +688,99 @@ async function getPatientUploadedFiles(req, res, next) {
     const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
     if (!supabaseUrl || !supabaseKey) {
-      return res.status(500).json({ 
-        ok: false, 
-        message: "Supabase not configured" 
+      return res.status(500).json({
+        ok: false,
+        message: "Supabase not configured",
       });
     }
 
     // Build the REST API URL for the lab_result_uploads table
     // Note: table uses 'created_at' not 'uploaded_at'
-    let apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodeURIComponent(hpercode)}&order=created_at.desc&limit=100`;
-    
+    const encodedHpercode = encodeURIComponent(hpercode);
+    let apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodedHpercode}&order=created_at.desc&limit=100`;
+
     if (enccode) {
-      apiUrl += `&enccode=eq.${encodeURIComponent(enccode)}`;
+      // enccode can contain special chars like / and :, must be properly encoded
+      const encodedEnccode = encodeURIComponent(enccode);
+      apiUrl += `&enccode=eq.${encodedEnccode}`;
     }
 
+    console.log(
+      "[getPatientUploadedFiles] Calling Supabase:",
+      apiUrl.replace(supabaseKey, "***"),
+    );
+
     const response = await fetch(apiUrl, {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Content-Type': 'application/json',
-        'apikey': supabaseKey,
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Prefer': 'count=exact'
-      }
+        "Content-Type": "application/json",
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        Prefer: "count=exact",
+      },
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Supabase REST API error:", response.status, errorText);
-      console.error("API URL:", apiUrl);
-      console.error("Supabase URL from env:", supabaseUrl);
-      return res.status(500).json({ 
-        ok: false, 
-        message: `Supabase error ${response.status}: ${errorText}`,
+      console.error(
+        "[getPatientUploadedFiles] Supabase REST API error:",
+        response.status,
+        errorText,
+      );
+      console.error(
+        "[getPatientUploadedFiles] Full URL:",
+        apiUrl.replace(supabaseKey, "***"),
+      );
+
+      // Check for common Supabase errors that should return empty data instead of 500
+      // These errors indicate the table doesn't exist or has RLS issues - return empty array
+      const errorPatterns = [
+        'relation "[^"]*lab_result_uploads" does not exist',
+        "permission denied",
+        "row-level security",
+        'table "[^"]*lab_result_uploads" does not exist',
+        "42P01", // PostgreSQL undefined table
+        "42501", // PostgreSQL permission denied
+      ];
+
+      const isRecoverableError = errorPatterns.some((pattern) =>
+        errorText.toLowerCase().includes(pattern.toLowerCase()),
+      );
+
+      if (isRecoverableError) {
+        console.warn(
+          "[getPatientUploadedFiles] Supabase table not available or RLS issue - returning empty array",
+        );
+        return res.json({
+          ok: true,
+          hpercode,
+          enccode: enccode || null,
+          count: 0,
+          data: [],
+          _debug: {
+            supabaseStatus: response.status,
+            message: "Supabase table not configured yet",
+          },
+        });
+      }
+
+      // For other errors, return the error details
+      let errorDetail = errorText;
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorDetail =
+          errorJson.message || errorJson.details || errorJson.hint || errorText;
+      } catch (e) {
+        // Keep original error text
+      }
+
+      return res.status(500).json({
+        ok: false,
+        message: `Supabase error: ${errorDetail}`,
         debug: {
-          apiUrl: apiUrl,
-          supabaseUrl: supabaseUrl,
-          status: response.status
-        }
+          supabaseStatus: response.status,
+          errorType: "supabase_api_error",
+        },
       });
     }
 
@@ -743,9 +795,9 @@ async function getPatientUploadedFiles(req, res, next) {
     });
   } catch (error) {
     console.error("getPatientUploadedFiles error:", error);
-    return res.status(500).json({ 
-      ok: false, 
-      message: `Error: ${error.message}` 
+    return res.status(500).json({
+      ok: false,
+      message: `Error: ${error.message}`,
     });
   }
 }
