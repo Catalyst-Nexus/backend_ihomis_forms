@@ -491,6 +491,8 @@ async function validateAdmission(req, res, next) {
     const { enccode } = req.params;
     const hpercode = await resolveHpercode(enccode);
 
+    console.log(`[ADMISSION DEBUG] Processing enccode=${enccode}, hpercode=${hpercode}`);
+
     const results = {
       enccode,
       vitalSigns: await checkAdmissionVitalSigns(enccode, hpercode),
@@ -536,16 +538,30 @@ async function validateAdmission(req, res, next) {
       results.systemReview &&
       results.courseWard;
 
+    const missingFields = Object.entries(results)
+      .filter(([key, value]) => key !== "enccode" && !value)
+      .map(([key]) => key);
+
+    console.log(`[ADMISSION DEBUG] Results: isComplete=${isComplete}, missingCount=${missingFields.length}`);
+
     res.json({
       ok: true,
       enccode,
       isComplete,
       details: results,
-      missingFields: Object.entries(results)
-        .filter(([key, value]) => key !== "enccode" && !value)
-        .map(([key]) => key),
+      missingFields,
+      DEBUG_INFO: {
+        timestamp: new Date().toISOString(),
+        enccode,
+        hpercode,
+        totalChecks: Object.keys(results).length - 1,
+        passedChecks: Object.values(results).filter(v => v === true).length,
+        failedChecks: Object.values(results).filter(v => v === false).length,
+        queryDetails: "Added hpercode fallback for all checks",
+      },
     });
   } catch (error) {
+    console.error(`[ADMISSION ERROR] enccode=${req.params.enccode}:`, error);
     next(error);
   }
 }
@@ -557,6 +573,8 @@ async function validateAdmission(req, res, next) {
 async function validateDischarge(req, res, next) {
   try {
     const { enccode } = req.params;
+
+    console.log(`[DISCHARGE DEBUG] Processing enccode=${enccode}`);
 
     const dischargeOrder = await checkDischargeOrder(enccode);
     const finalDiagnosis = await checkFinalDiagnosis(enccode);
@@ -577,6 +595,12 @@ async function validateDischarge(req, res, next) {
       results.icdCode &&
       results.courseInWard;
 
+    const missingFields = Object.entries(results)
+      .filter(([key, value]) => key !== "enccode" && !value)
+      .map(([key]) => key);
+
+    console.log(`[DISCHARGE DEBUG] Results: isComplete=${isComplete}, dischargeOrder=${results.dischargeOrder}, finalDiagnosis=${results.finalDiagnosis}, icdCode=${results.icdCode}, courseInWard=${results.courseInWard}`);
+
     res.json({
       ok: true,
       enccode,
@@ -587,11 +611,19 @@ async function validateDischarge(req, res, next) {
         finalDiagnosisText: finalDiagnosis || null,
         icdCodeValue: icdCode || null,
       },
-      missingFields: Object.entries(results)
-        .filter(([key, value]) => key !== "enccode" && !value)
-        .map(([key]) => key),
+      missingFields,
+      DEBUG_INFO: {
+        timestamp: new Date().toISOString(),
+        enccode,
+        dischargeOrderFound: !!dischargeOrder,
+        finalDiagnosisFound: !!finalDiagnosis,
+        icdCodeFound: !!icdCode,
+        courseInWardStatus: courseInWard,
+        queryDetails: "Checking discharge order, final diagnosis, ICD code, and course in ward",
+      },
     });
   } catch (error) {
+    console.error(`[DISCHARGE ERROR] enccode=${req.params.enccode}:`, error);
     next(error);
   }
 }
@@ -604,6 +636,8 @@ async function getValidationDetails(req, res, next) {
   try {
     const { enccode } = req.params;
     const hpercode = await resolveHpercode(enccode);
+
+    console.log(`[DETAILS DEBUG] Processing enccode=${enccode}, hpercode=${hpercode}`);
 
     const allValidations = {
       admission: {
@@ -638,12 +672,30 @@ async function getValidationDetails(req, res, next) {
       phic: await checkPhicStatus(enccode),
     };
 
+    const admissionPassed = Object.values(allValidations.admission)
+      .flat()
+      .filter(v => typeof v === 'boolean' && v).length;
+    const dischargePassed = Object.values(allValidations.discharge)
+      .filter(v => typeof v === 'boolean' && v).length;
+
+    console.log(`[DETAILS DEBUG] Admission passed=${admissionPassed}, Discharge passed=${dischargePassed}`);
+
     res.json({
       ok: true,
       enccode,
       validations: allValidations,
+      DEBUG_INFO: {
+        timestamp: new Date().toISOString(),
+        enccode,
+        hpercode,
+        admissionChecksPassed: admissionPassed,
+        dischargeChecksPassed: dischargePassed,
+        phicStatus: allValidations.phic,
+        note: "Debug info - these fields will be removed after diagnosis",
+      },
     });
   } catch (error) {
+    console.error(`[DETAILS ERROR] enccode=${req.params.enccode}:`, error);
     next(error);
   }
 }
