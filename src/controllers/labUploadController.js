@@ -389,22 +389,40 @@ async function registerLabResultUpload(req, res, next) {
         .json({ ok: false, message: "Encounter not found" });
     }
 
-    // ── 4. Validate order in MySQL if provided ───────────────────
-    if (orcode) {
-      const order = await validateOrderInMySQL(orcode, enccode);
-      if (!order) {
-        return res.status(404).json({ ok: false, message: "Order not found" });
-      }
+    // ── 4. Validate docointkey exists in MySQL hdocord (REQUIRED) ──
+    // docointkey must come from MySQL hdocord - NEVER generate or accept fabricated keys
+    if (!providedDocointkey) {
+      return res.status(400).json({ 
+        ok: false, 
+        message: "docointkey is required and must come from MySQL hdocord table" 
+      });
     }
+
+    // Validate the docointkey exists in hdocord for this encounter
+    const [orderRows] = await pool.query(
+      `SELECT docointkey, enccode, orcode, proccode 
+       FROM hdocord 
+       WHERE docointkey = ? AND enccode = ? 
+       LIMIT 1`,
+      [providedDocointkey, enccode]
+    );
+
+    if (!orderRows[0]?.docointkey) {
+      return res.status(404).json({ 
+        ok: false, 
+        message: "Order (docointkey) not found in MySQL hdocord for this encounter" 
+      });
+    }
+
+    // Use the validated docointkey - do NOT auto-generate
+    const docointkey = providedDocointkey;
 
     // ── 5. Resolve proccode ───────────────────────────────────────
     // proccode takes precedence; procedureInstanceId is an alias
     const resolvedProccode = proccode || procedureInstanceId || null;
 
-    // ── 6. Get Supabase client and generate docointkey ──────────
+    // ── 6. Get Supabase client ────────────────────────────────────
     const supabase = getSupabaseAdmin();
-    const docointkey =
-      providedDocointkey || (await generateDocointkey(supabase));
 
     // ── 7. Upload PDF to Supabase Storage ───────────────────────
     const bucketName = process.env.SUPABASE_LAB_RESULTS_BUCKET || process.env.SUPABASE_LAB_BUCKET || "lab-results";
@@ -464,6 +482,7 @@ async function registerLabResultUpload(req, res, next) {
     // ── 8. Insert metadata into Supabase lab_result_uploads ─────
     // Column names match the existing Supabase schema exactly:
     // hpercode, enccode, orcode, proccode, procedure_instance_id, docointkey, ...
+    // NOTE: procedure_instance_id is set to docointkey (from MySQL hdocord), NOT proccode
     const { data: insertData, error: insertError } = await supabase
       .from("lab_result_uploads")
       .insert({
@@ -471,7 +490,7 @@ async function registerLabResultUpload(req, res, next) {
         enccode,
         orcode: orcode || null,
         proccode: resolvedProccode || null,
-        procedure_instance_id: resolvedProccode || null,
+        procedure_instance_id: docointkey,  // Set to docointkey from MySQL hdocord
         docointkey,
         file_name: file.originalname || "lab_result.pdf",
         file_url: uploadedUrl,
