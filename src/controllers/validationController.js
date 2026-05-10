@@ -6,6 +6,34 @@ function buildMissingFields(results) {
     .map(([key]) => key);
 }
 
+async function checkOrderClearance(enccode, orcode) {
+  try {
+    const [rows] = await pool.query(
+      "SELECT 1 FROM hdocord WHERE enccode = ? AND orcode = ? LIMIT 1",
+      [enccode, orcode]
+    );
+
+    return rows.length === 0;
+  } catch (error) {
+    console.error(`Error checking ${orcode} clearance:`, error);
+    throw error;
+  }
+}
+
+async function checkNewbornClearance(enccode) {
+  try {
+    const [rows] = await pool.query(
+      "SELECT 1 FROM hnewborn WHERE enccode = ? LIMIT 1",
+      [enccode]
+    );
+
+    return rows.length === 0;
+  } catch (error) {
+    console.error("Error checking newborn clearance:", error);
+    throw error;
+  }
+}
+
 /**
  * Check if admission vital signs exist for an encounter
  */
@@ -382,6 +410,16 @@ async function checkPhicStatus(enccode) {
   }
 }
 
+async function checkDischargeClearances(enccode) {
+  return {
+    pharmacy: await checkOrderClearance(enccode, "PHARM"),
+    csr: await checkOrderClearance(enccode, "CSR"),
+    laboratory: await checkOrderClearance(enccode, "LABOR"),
+    radiology: await checkOrderClearance(enccode, "RADIO"),
+    newborn: await checkNewbornClearance(enccode),
+  };
+}
+
 // ===================== EXPRESS ROUTE HANDLERS =====================
 
 /**
@@ -457,6 +495,7 @@ async function validateDischarge(req, res, next) {
   try {
     const { enccode } = req.params;
 
+    const clearances = await checkDischargeClearances(enccode);
     const dischargeOrder = await checkDischargeOrder(enccode);
     const finalDiagnosis = await checkFinalDiagnosis(enccode);
     const icdCode = await checkICDCode(enccode);
@@ -464,6 +503,7 @@ async function validateDischarge(req, res, next) {
 
     const results = {
       enccode,
+      ...clearances,
       dischargeOrder: !!dischargeOrder,
       finalDiagnosis: !!finalDiagnosis,
       icdCode: !!icdCode,
@@ -482,6 +522,7 @@ async function validateDischarge(req, res, next) {
       isComplete,
       details: {
         ...results,
+        clearances,
         dischargeOrderDate: dischargeOrder || null,
         finalDiagnosisText: finalDiagnosis || null,
         icdCodeValue: icdCode || null,
@@ -526,6 +567,7 @@ async function getValidationDetails(req, res, next) {
         courseWard: await checkAdmissionCourseWard(enccode),
       },
       discharge: {
+        clearances: await checkDischargeClearances(enccode),
         order: await checkDischargeOrder(enccode),
         finalDiagnosis: await checkFinalDiagnosis(enccode),
         icdCode: await checkICDCode(enccode),
@@ -643,4 +685,5 @@ module.exports = {
   checkFinalDiagnosis,
   checkICDCode,
   checkPhicStatus,
+  checkDischargeClearances,
 };
