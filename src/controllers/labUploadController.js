@@ -69,11 +69,6 @@ function getSupabaseStorageClient() {
   });
 }
 
-function getSignedUrlTtlSeconds() {
-  const ttl = Number(process.env.SUPABASE_SIGNED_URL_TTL || 3600);
-  return Number.isFinite(ttl) && ttl > 0 ? ttl : 3600;
-}
-
 async function resolveUploadedFileUrl(supabase, bucketName, fileRow) {
   const storagePath = String(fileRow?.storage_path || "").trim();
   const storedUrl = String(fileRow?.file_url || "").trim();
@@ -82,23 +77,16 @@ async function resolveUploadedFileUrl(supabase, bucketName, fileRow) {
     return storedUrl;
   }
 
-  const isSigned = Boolean(fileRow?.is_signed_url);
-
-  if (!isSigned && storedUrl) {
-    return storedUrl;
-  }
-
   try {
-    const { data, error } = await supabase.storage
+    const { data } = supabase.storage
       .from(bucketName)
-      .createSignedUrl(storagePath, getSignedUrlTtlSeconds());
-
-    if (!error && data?.signedUrl) {
-      return data.signedUrl;
+      .getPublicUrl(storagePath);
+    if (data?.publicUrl) {
+      return data.publicUrl;
     }
   } catch (error) {
     console.warn(
-      "[getPatientUploadedFiles] Failed to refresh signed URL for storage path:",
+      "[getPatientUploadedFiles] Failed to resolve public URL for storage path:",
       storagePath,
       error?.message || error,
     );
@@ -552,30 +540,13 @@ async function registerLabResultUpload(req, res, next) {
         );
       }
 
-      // Build URL — prefer signed URL if configured
-      const useSigned =
-        String(process.env.SUPABASE_USE_SIGNED_URL || "true").toLowerCase() ===
-        "true";
-      const signedTtl = Number(process.env.SUPABASE_SIGNED_URL_TTL || 3600);
-
-      if (useSigned) {
-        const { data: signedData, error: signedError } = await supabase.storage
-          .from(bucketName)
-          .createSignedUrl(storagePath, signedTtl);
-
-        if (!signedError && signedData?.signedUrl) {
-          uploadedUrl = signedData.signedUrl;
-        }
-      }
-
-      if (!uploadedUrl) {
-        const { data: publicData } = supabase.storage
-          .from(bucketName)
-          .getPublicUrl(storagePath);
-        uploadedUrl =
-          publicData?.publicUrl ||
-          `https://${bucketName}.supabase.co/storage/v1/object/public/${storagePath}`;
-      }
+      // Public-only bucket path: always use the public URL
+      const { data: publicData } = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(storagePath);
+      uploadedUrl =
+        publicData?.publicUrl ||
+        `https://${bucketName}.supabase.co/storage/v1/object/public/${storagePath}`;
     } catch (supabaseError) {
       return res.status(502).json({
         ok: false,
@@ -609,10 +580,8 @@ async function registerLabResultUpload(req, res, next) {
         uploaded_by: uploadedBy || null,
         remarks: remarks || null,
         source: normalizedSource,
-        is_signed_url: useSigned,
-        url_expires_at: useSigned
-          ? new Date(Date.now() + signedTtl * 1000).toISOString()
-          : null,
+        is_signed_url: false,
+        url_expires_at: null,
       })
       .select()
       .single();
