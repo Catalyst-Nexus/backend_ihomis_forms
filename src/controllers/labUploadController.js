@@ -57,6 +57,18 @@ function getSupabaseAdmin() {
   return _supabaseAdmin;
 }
 
+function getSupabaseStorageClient() {
+  const { supabaseUrl, supabaseKey } = getSupabaseConfig();
+
+  if (!supabaseUrl || !supabaseKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
 function getSignedUrlTtlSeconds() {
   const ttl = Number(process.env.SUPABASE_SIGNED_URL_TTL || 3600);
   return Number.isFinite(ttl) && ttl > 0 ? ttl : 3600;
@@ -799,9 +811,15 @@ async function getPatientUploadedFiles(req, res, next) {
     const { supabaseUrl, supabaseKey } = getSupabaseConfig();
 
     if (!supabaseUrl || !supabaseKey) {
-      return res.status(500).json({
-        ok: false,
-        message: "Supabase not configured",
+      return res.json({
+        ok: true,
+        hpercode,
+        enccode: enccode || null,
+        count: 0,
+        data: [],
+        _debug: {
+          message: "Supabase not configured",
+        },
       });
     }
 
@@ -907,13 +925,19 @@ async function getPatientUploadedFiles(req, res, next) {
       }
     }
 
+    const storageClient = getSupabaseStorageClient();
     const resolvedFiles = await Promise.all(
       (files || []).map(async (fileRow) => {
-        const refreshedUrl = await resolveUploadedFileUrl(
-          getSupabaseAdmin(),
-          bucketName,
-          fileRow,
-        );
+        let refreshedUrl = String(fileRow?.file_url || "").trim();
+
+        if (storageClient) {
+          refreshedUrl =
+            (await resolveUploadedFileUrl(
+              storageClient,
+              bucketName,
+              fileRow,
+            )) || refreshedUrl;
+        }
 
         return {
           ...fileRow,
