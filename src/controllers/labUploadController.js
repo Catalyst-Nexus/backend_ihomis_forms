@@ -57,6 +57,44 @@ function getSupabaseAdmin() {
   return _supabaseAdmin;
 }
 
+function getSignedUrlTtlSeconds() {
+  const ttl = Number(process.env.SUPABASE_SIGNED_URL_TTL || 3600);
+  return Number.isFinite(ttl) && ttl > 0 ? ttl : 3600;
+}
+
+async function resolveUploadedFileUrl(supabase, bucketName, fileRow) {
+  const storagePath = String(fileRow?.storage_path || "").trim();
+  const storedUrl = String(fileRow?.file_url || "").trim();
+
+  if (!storagePath) {
+    return storedUrl;
+  }
+
+  const isSigned = Boolean(fileRow?.is_signed_url);
+
+  if (!isSigned && storedUrl) {
+    return storedUrl;
+  }
+
+  try {
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .createSignedUrl(storagePath, getSignedUrlTtlSeconds());
+
+    if (!error && data?.signedUrl) {
+      return data.signedUrl;
+    }
+  } catch (error) {
+    console.warn(
+      "[getPatientUploadedFiles] Failed to refresh signed URL for storage path:",
+      storagePath,
+      error?.message || error,
+    );
+  }
+
+  return storedUrl;
+}
+
 // ── MySQL validation helpers ────────────────────────────────────
 
 async function validatePatientInMySQL(hpercode) {
@@ -767,6 +805,11 @@ async function getPatientUploadedFiles(req, res, next) {
       });
     }
 
+    const bucketName =
+      process.env.SUPABASE_LAB_RESULTS_BUCKET ||
+      process.env.SUPABASE_LAB_BUCKET ||
+      "lab-results";
+
     // Build the REST API URL for the lab_result_uploads table
     // Note: table uses 'created_at' not 'uploaded_at'
     const encodedHpercode = encodeURIComponent(hpercode);
@@ -864,12 +907,28 @@ async function getPatientUploadedFiles(req, res, next) {
       }
     }
 
+    const resolvedFiles = await Promise.all(
+      (files || []).map(async (fileRow) => {
+        const refreshedUrl = await resolveUploadedFileUrl(
+          getSupabaseAdmin(),
+          bucketName,
+          fileRow,
+        );
+
+        return {
+          ...fileRow,
+          file_url: refreshedUrl || fileRow?.file_url || null,
+          uploadedPdfUrl: refreshedUrl || fileRow?.file_url || null,
+        };
+      }),
+    );
+
     return res.json({
       ok: true,
       hpercode,
       enccode: enccode || null,
-      count: files?.length || 0,
-      data: files || [],
+      count: resolvedFiles?.length || 0,
+      data: resolvedFiles || [],
     });
   } catch (error) {
     console.error("getPatientUploadedFiles error:", error);
