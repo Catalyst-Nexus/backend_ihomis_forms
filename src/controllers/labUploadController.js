@@ -211,6 +211,7 @@ async function getOrdersForEncounter(req, res, next) {
     const baseSelect = `
       SELECT
         hdocord.enccode,
+        hdocord.oritem,
         hdocord.docointkey,
         hdocord.orcode,
         hdocord.proccode,
@@ -834,6 +835,34 @@ async function getPatientUploadedFiles(req, res, next) {
         jsonError.message,
       );
       files = [];
+    }
+
+    // If an enccode filter was provided, ensure Supabase returned only matching enccode records.
+    if (enccode) {
+      const mismatches = (files || []).filter((f) => {
+        const fileEnccode = f?.enccode || f?.encounter_code || null;
+        if (!fileEnccode) return true; // record missing enccode is a mismatch
+        try {
+          const decoded = decodeURIComponent(String(fileEnccode));
+          return String(decoded).trim() !== String(enccode).trim();
+        } catch {
+          return String(fileEnccode).trim() !== String(enccode).trim();
+        }
+      });
+
+      if (mismatches.length > 0) {
+        console.error(
+          `[getPatientUploadedFiles] Supabase returned records that do not match requested enccode=${enccode}. Rejecting mixed results.`,
+        );
+        return res.status(400).json({
+          ok: false,
+          message:
+            "Supabase returned mixed encounter results. The server refuses to return mixed-encounter data when an enccode filter is provided.",
+          requestedEnccode: enccode,
+          mismatchesCount: mismatches.length,
+          _debugSample: mismatches.slice(0, 3),
+        });
+      }
     }
 
     return res.json({
