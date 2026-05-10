@@ -787,6 +787,12 @@ async function debugSampleData(req, res, next) {
  */
 async function getPatientUploadedFiles(req, res, next) {
   try {
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
+
     const { hpercode } = req.params;
     // URL-decode the enccode query parameter
     let enccode = req.query.enccode
