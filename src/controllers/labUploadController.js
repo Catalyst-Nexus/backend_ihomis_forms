@@ -907,19 +907,25 @@ async function getPatientUploadedFiles(req, res, next) {
       }
 
       const decoded = decodeValue(value).trim();
-      return decoded === normalizedEnccode || String(value || "").trim() === normalizedEnccode;
+      return (
+        decoded === normalizedEnccode ||
+        String(value || "").trim() === normalizedEnccode
+      );
     };
 
     const filesForEncounter = normalizedEnccode
-      ? (files || []).filter((fileRow) =>
-          matchesEnccode(fileRow?.enccode) ||
-          matchesEnccode(fileRow?.encounter_code) ||
-          matchesEnccode(fileRow?.enccode_raw),
+      ? (files || []).filter(
+          (fileRow) =>
+            matchesEnccode(fileRow?.enccode) ||
+            matchesEnccode(fileRow?.encounter_code) ||
+            matchesEnccode(fileRow?.enccode_raw),
         )
-      : (files || []);
+      : files || [];
 
     const filesToReturn =
-      normalizedEnccode && filesForEncounter.length > 0 ? filesForEncounter : (files || []);
+      normalizedEnccode && filesForEncounter.length > 0
+        ? filesForEncounter
+        : files || [];
 
     const storageClient = getSupabaseStorageClient();
     const resolvedFiles = await Promise.all(
