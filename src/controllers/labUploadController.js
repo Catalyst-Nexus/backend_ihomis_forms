@@ -22,10 +22,15 @@ const { createClient } = require("@supabase/supabase-js");
 let _supabaseAdmin = null;
 
 function getSupabaseConfig() {
-  const supabaseUrl = (process.env.SUPABASE_URL || "").trim();
+  const supabaseUrl = (
+    process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ""
+  ).trim();
   const supabaseKey = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_KEY ||
+    process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
     ""
   ).trim();
 
@@ -39,7 +44,7 @@ function getSupabaseAdmin() {
 
   if (!supabaseUrl || !supabaseKey) {
     throw new Error(
-      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY).",
+      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY). VITE_ variants are also supported.",
     );
   }
 
