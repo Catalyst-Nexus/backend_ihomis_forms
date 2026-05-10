@@ -1,5 +1,11 @@
 const pool = require("../config/db");
 
+function buildMissingFields(results) {
+  return Object.entries(results)
+    .filter(([key, value]) => key !== "enccode" && !value)
+    .map(([key]) => key);
+}
+
 /**
  * Check if admission vital signs exist for an encounter
  */
@@ -64,7 +70,7 @@ async function checkAdmissionHistoryOB(enccode) {
     const { tscode } = admLog[0];
 
     // S0005 = OBSTETRICS
-    if (tscode === "S0005") {
+    if (String(tscode || "").toUpperCase() === "S0005") {
       const [rows] = await pool.query(
         `SELECT * FROM hmrhistoob 
          WHERE enccode = ? 
@@ -99,7 +105,7 @@ async function checkAdmissionPrenatal(enccode) {
     const { tscode } = admLog[0];
 
     // S0005 = OBSTETRICS
-    if (tscode === "S0005") {
+    if (String(tscode || "").toUpperCase() === "S0005") {
       const [rows] = await pool.query(
         `SELECT * FROM hprenatal 
          WHERE enccode = ? 
@@ -436,9 +442,7 @@ async function validateAdmission(req, res, next) {
       enccode,
       isComplete,
       details: results,
-      missingFields: Object.entries(results)
-        .filter(([key, value]) => key !== "enccode" && !value)
-        .map(([key]) => key),
+      missingFields: buildMissingFields(results),
     });
   } catch (error) {
     next(error);
@@ -482,9 +486,7 @@ async function validateDischarge(req, res, next) {
         finalDiagnosisText: finalDiagnosis || null,
         icdCodeValue: icdCode || null,
       },
-      missingFields: Object.entries(results)
-        .filter(([key, value]) => key !== "enccode" && !value)
-        .map(([key]) => key),
+      missingFields: buildMissingFields(results),
     });
   } catch (error) {
     next(error);
@@ -582,11 +584,50 @@ async function validatePhic(req, res, next) {
 }
 
 module.exports = {
+  // Express handlers
   validateAdmission,
   validateDischarge,
   getValidationDetails,
   checkHistory,
   validatePhic,
+
+  // PHP-compatible aliases for legacy parity checks
+  AdmissionVitalSigns: checkAdmissionVitalSigns,
+  AdmissionBMI: checkAdmissionBMI,
+  AdmissionHistoryGDPPR: (enccode) => checkAdmissionHistory(enccode, "GDPPR"),
+  AdmissionHistoryCOMPL: (enccode) => checkAdmissionHistory(enccode, "COMPL"),
+  AdmissionHistoryPRHIS: (enccode) => checkAdmissionHistory(enccode, "PRHIS"),
+  AdmissionHistoryPAHIS: (enccode) => checkAdmissionHistory(enccode, "PAHIS"),
+  AdmissionHistoryOCENV: (enccode) => checkAdmissionHistory(enccode, "OCENV"),
+  AdmissionHistoryFAHIS: (enccode) => checkAdmissionHistory(enccode, "FAHIS"),
+  AdmissionHistoryDRTHE: (enccode) => checkAdmissionHistory(enccode, "DRTHE"),
+  AdmissionHistoryALCOH: (enccode) => checkAdmissionHistory(enccode, "ALCOH"),
+  AdmissionHistoryTOBAC: (enccode) => checkAdmissionHistory(enccode, "TOBAC"),
+  AdmissionHistoryDRUGA: (enccode) => checkAdmissionHistory(enccode, "DRUGA"),
+  AdmissionHistoryOTHAL: (enccode) => checkAdmissionHistory(enccode, "OTHAL"),
+  AdmissionHistoryOB: checkAdmissionHistoryOB,
+  AdmissionPrenatal: checkAdmissionPrenatal,
+  AdmissionPertinentSignSymptoms: checkAdmissionPertinentSignSymptoms,
+  AdmissionPhysicalExam: checkAdmissionPhysicalExam,
+  AdmissionSystemReview: checkAdmissionSystemReview,
+  AdmissionCourseWard: checkAdmissionCourseWard,
+  Admission: validateAdmission,
+  FullCourseWard: checkAdmissionCourseWard,
+  CourseInTheWardDischarge: checkCourseInTheWardDischarge,
+  CourseInTheWardDate: async (enccode, date) => {
+    const [rows] = await pool.query(
+      "SELECT * FROM hcrsward WHERE enccode = ? AND dtetake LIKE ? LIMIT 1",
+      [enccode, `%${date}%`]
+    );
+
+    return rows.length > 0;
+  },
+  DischargeOrder: checkDischargeOrder,
+  FinalDiagnosis: checkFinalDiagnosis,
+  ICDCode: checkICDCode,
+  Discharge: validateDischarge,
+  PhicStatus: checkPhicStatus,
+
   // Export internal functions for testing or other controllers
   checkAdmissionVitalSigns,
   checkAdmissionBMI,
