@@ -855,6 +855,58 @@ async function getPatientUploadedFiles(req, res, next) {
       );
     };
 
+    const fetchDocointkeysForEncounter = async (encodedEncounter) => {
+      if (!encodedEncounter) {
+        return [];
+      }
+
+      const docKeyRows = [];
+
+      try {
+        const exactQuery = await pool.query(
+          `SELECT DISTINCT docointkey
+           FROM hdocord
+           WHERE enccode = ?
+             AND docointkey IS NOT NULL
+             AND docointkey != ''
+           LIMIT 200`,
+          [encodedEncounter],
+        );
+
+        docKeyRows.push(...(exactQuery[0] || []));
+      } catch (error) {
+        console.warn(
+          "[getPatientUploadedFiles] Failed exact hdocord docointkey lookup:",
+          error?.message || error,
+        );
+      }
+
+      if (!docKeyRows.length) {
+        try {
+          const prefixQuery = await pool.query(
+            `SELECT DISTINCT docointkey
+             FROM hdocord
+             WHERE enccode LIKE ?
+               AND docointkey IS NOT NULL
+               AND docointkey != ''
+             LIMIT 200`,
+            [`${encodedEncounter}%`],
+          );
+
+          docKeyRows.push(...(prefixQuery[0] || []));
+        } catch (error) {
+          console.warn(
+            "[getPatientUploadedFiles] Failed prefix hdocord docointkey lookup:",
+            error?.message || error,
+          );
+        }
+      }
+
+      return Array.from(
+        new Set(docKeyRows.map((row) => String(row?.docointkey || "").trim()).filter(Boolean)),
+      );
+    };
+
     const fetchSupabaseFiles = async (queryParts, label) => {
       const query = queryParts.join("&");
       const apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?${query}&order=created_at.desc&limit=100`;
@@ -911,10 +963,29 @@ async function getPatientUploadedFiles(req, res, next) {
       );
     }
 
+    let docointkeyFiles = [];
+    if (normalizedEnccode) {
+      const docointkeys = await fetchDocointkeysForEncounter(normalizedEnccode);
+
+      if (docointkeys.length > 0) {
+        const inList = docointkeys
+          .map((value) => String(value).replace(/,/g, "\\,").trim())
+          .filter(Boolean)
+          .join(",");
+
+        if (inList) {
+          docointkeyFiles = await fetchSupabaseFiles(
+            [`docointkey=in.(${encodeURIComponent(inList)})`],
+            "docointkey",
+          );
+        }
+      }
+    }
+
     const mergedFiles = [];
     const seenKeys = new Set();
 
-    for (const fileRow of [...encounterFiles, ...patientFiles]) {
+    for (const fileRow of [...docointkeyFiles, ...encounterFiles, ...patientFiles]) {
       const key = [
         fileRow?.id,
         fileRow?.storage_path,
