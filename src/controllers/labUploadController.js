@@ -834,70 +834,6 @@ async function getPatientUploadedFiles(req, res, next) {
       process.env.SUPABASE_LAB_BUCKET ||
       "lab-results";
 
-    // Build the REST API URL for the lab_result_uploads table.
-    // Fetch by patient first, then apply encounter matching locally so a stale
-    // or differently encoded enccode cannot blank the patient history modal.
-    const encodedHpercode = encodeURIComponent(hpercode);
-    const apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodedHpercode}&order=created_at.desc&limit=100`;
-
-    console.log(
-      "[getPatientUploadedFiles] Calling Supabase:",
-      apiUrl.replace(supabaseKey, "***"),
-    );
-
-    const response = await fetch(apiUrl, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-        Prefer: "count=exact",
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(
-        "[getPatientUploadedFiles] Supabase REST API error:",
-        response.status,
-        errorText,
-      );
-      console.error(
-        "[getPatientUploadedFiles] Full URL:",
-        apiUrl.replace(supabaseKey, "***"),
-      );
-
-      // Treat ALL Supabase API errors as recoverable (table not found, RLS issues, etc.)
-      // If Supabase is down or table doesn't exist, return empty array gracefully
-      // This prevents the frontend from crashing when Supabase is not configured
-      console.warn(
-        "[getPatientUploadedFiles] Supabase returned error - returning empty array gracefully",
-      );
-      return res.json({
-        ok: true,
-        hpercode,
-        enccode: enccode || null,
-        count: 0,
-        data: [],
-        _debug: {
-          supabaseStatus: response.status,
-          message: "Supabase table not configured yet",
-        },
-      });
-    }
-
-    let files = [];
-    try {
-      files = await response.json();
-    } catch (jsonError) {
-      // Response was not valid JSON - log but return empty array
-      console.warn(
-        "[getPatientUploadedFiles] Response was not valid JSON:",
-        jsonError.message,
-      );
-      files = [];
-    }
-
     const normalizedEnccode = enccode ? String(enccode).trim() : "";
     const decodeValue = (value) => {
       try {
@@ -919,19 +855,85 @@ async function getPatientUploadedFiles(req, res, next) {
       );
     };
 
-    const filesForEncounter = normalizedEnccode
-      ? (files || []).filter(
-          (fileRow) =>
-            matchesEnccode(fileRow?.enccode) ||
-            matchesEnccode(fileRow?.encounter_code) ||
-            matchesEnccode(fileRow?.enccode_raw),
-        )
-      : files || [];
+    const fetchSupabaseFiles = async (queryParts, label) => {
+      const query = queryParts.join("&");
+      const apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?${query}&order=created_at.desc&limit=100`;
 
-    const filesToReturn =
-      normalizedEnccode && filesForEncounter.length > 0
-        ? filesForEncounter
-        : files || [];
+      console.log(
+        `[getPatientUploadedFiles] Calling Supabase (${label}):`,
+        apiUrl.replace(supabaseKey, "***"),
+      );
+
+      const response = await fetch(apiUrl, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+          Prefer: "count=exact",
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          `[getPatientUploadedFiles] Supabase REST API error (${label}):`,
+          response.status,
+          errorText,
+        );
+        return [];
+      }
+
+      try {
+        const payload = await response.json();
+        return Array.isArray(payload) ? payload : [];
+      } catch (jsonError) {
+        console.warn(
+          `[getPatientUploadedFiles] Response was not valid JSON (${label}):`,
+          jsonError.message,
+        );
+        return [];
+      }
+    };
+
+    const encodedHpercode = encodeURIComponent(hpercode);
+    const patientFiles = await fetchSupabaseFiles(
+      [`hpercode=eq.${encodedHpercode}`],
+      "patient",
+    );
+
+    let encounterFiles = [];
+    if (normalizedEnccode) {
+      const encodedEnccode = encodeURIComponent(normalizedEnccode);
+      encounterFiles = await fetchSupabaseFiles(
+        [`enccode=eq.${encodedEnccode}`],
+        "encounter",
+      );
+    }
+
+    const mergedFiles = [];
+    const seenKeys = new Set();
+
+    for (const fileRow of [...encounterFiles, ...patientFiles]) {
+      const key = [
+        fileRow?.id,
+        fileRow?.storage_path,
+        fileRow?.file_name,
+        fileRow?.docointkey,
+        fileRow?.created_at,
+      ]
+        .filter(Boolean)
+        .join("|");
+
+      if (!key || seenKeys.has(key)) {
+        continue;
+      }
+
+      seenKeys.add(key);
+      mergedFiles.push(fileRow);
+    }
+
+    const filesToReturn = mergedFiles;
 
     const storageClient = getSupabaseStorageClient();
     const resolvedFiles = await Promise.all(
@@ -964,8 +966,9 @@ async function getPatientUploadedFiles(req, res, next) {
       _debug: normalizedEnccode
         ? {
             requestedEnccode: normalizedEnccode,
-            matchedEncounterFiles: filesForEncounter.length,
-            returnedEncounterFiles: resolvedFiles.length,
+            encounterMatches: encounterFiles.length,
+            patientMatches: patientFiles.length,
+            returnedFiles: resolvedFiles.length,
           }
         : undefined,
     });
