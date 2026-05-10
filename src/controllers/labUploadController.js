@@ -828,16 +828,11 @@ async function getPatientUploadedFiles(req, res, next) {
       process.env.SUPABASE_LAB_BUCKET ||
       "lab-results";
 
-    // Build the REST API URL for the lab_result_uploads table
-    // Note: table uses 'created_at' not 'uploaded_at'
+    // Build the REST API URL for the lab_result_uploads table.
+    // Fetch by patient first, then apply encounter matching locally so a stale
+    // or differently encoded enccode cannot blank the patient history modal.
     const encodedHpercode = encodeURIComponent(hpercode);
-    let apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodedHpercode}&order=created_at.desc&limit=100`;
-
-    if (enccode) {
-      // enccode can contain special chars like / and :, must be properly encoded
-      const encodedEnccode = encodeURIComponent(enccode);
-      apiUrl += `&enccode=eq.${encodedEnccode}`;
-    }
+    const apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodedHpercode}&order=created_at.desc&limit=100`;
 
     console.log(
       "[getPatientUploadedFiles] Calling Supabase:",
@@ -897,37 +892,38 @@ async function getPatientUploadedFiles(req, res, next) {
       files = [];
     }
 
-    // If an enccode filter was provided, ensure Supabase returned only matching enccode records.
-    if (enccode) {
-      const mismatches = (files || []).filter((f) => {
-        const fileEnccode = f?.enccode || f?.encounter_code || null;
-        if (!fileEnccode) return true; // record missing enccode is a mismatch
-        try {
-          const decoded = decodeURIComponent(String(fileEnccode));
-          return String(decoded).trim() !== String(enccode).trim();
-        } catch {
-          return String(fileEnccode).trim() !== String(enccode).trim();
-        }
-      });
-
-      if (mismatches.length > 0) {
-        console.error(
-          `[getPatientUploadedFiles] Supabase returned records that do not match requested enccode=${enccode}. Rejecting mixed results.`,
-        );
-        return res.status(400).json({
-          ok: false,
-          message:
-            "Supabase returned mixed encounter results. The server refuses to return mixed-encounter data when an enccode filter is provided.",
-          requestedEnccode: enccode,
-          mismatchesCount: mismatches.length,
-          _debugSample: mismatches.slice(0, 3),
-        });
+    const normalizedEnccode = enccode ? String(enccode).trim() : "";
+    const decodeValue = (value) => {
+      try {
+        return decodeURIComponent(String(value));
+      } catch {
+        return String(value || "");
       }
-    }
+    };
+
+    const matchesEnccode = (value) => {
+      if (!normalizedEnccode) {
+        return true;
+      }
+
+      const decoded = decodeValue(value).trim();
+      return decoded === normalizedEnccode || String(value || "").trim() === normalizedEnccode;
+    };
+
+    const filesForEncounter = normalizedEnccode
+      ? (files || []).filter((fileRow) =>
+          matchesEnccode(fileRow?.enccode) ||
+          matchesEnccode(fileRow?.encounter_code) ||
+          matchesEnccode(fileRow?.enccode_raw),
+        )
+      : (files || []);
+
+    const filesToReturn =
+      normalizedEnccode && filesForEncounter.length > 0 ? filesForEncounter : (files || []);
 
     const storageClient = getSupabaseStorageClient();
     const resolvedFiles = await Promise.all(
-      (files || []).map(async (fileRow) => {
+      filesToReturn.map(async (fileRow) => {
         let refreshedUrl = String(fileRow?.file_url || "").trim();
 
         if (storageClient) {
@@ -953,6 +949,13 @@ async function getPatientUploadedFiles(req, res, next) {
       enccode: enccode || null,
       count: resolvedFiles?.length || 0,
       data: resolvedFiles || [],
+      _debug: normalizedEnccode
+        ? {
+            requestedEnccode: normalizedEnccode,
+            matchedEncounterFiles: filesForEncounter.length,
+            returnedEncounterFiles: resolvedFiles.length,
+          }
+        : undefined,
     });
   } catch (error) {
     console.error("getPatientUploadedFiles error:", error);
