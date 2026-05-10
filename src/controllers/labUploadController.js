@@ -23,7 +23,9 @@ let _supabaseAdmin = null;
 
 function getSupabaseConfig() {
   const supabaseUrl = (
-    process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ""
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    ""
   ).trim();
   const supabaseKey = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
