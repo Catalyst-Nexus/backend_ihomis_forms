@@ -211,7 +211,6 @@ async function getOrdersForEncounter(req, res, next) {
     const baseSelect = `
       SELECT
         hdocord.enccode,
-        hdocord.oritem,
         hdocord.docointkey,
         hdocord.orcode,
         hdocord.proccode,
