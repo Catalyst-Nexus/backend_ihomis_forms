@@ -903,7 +903,11 @@ async function getPatientUploadedFiles(req, res, next) {
       }
 
       return Array.from(
-        new Set(docKeyRows.map((row) => String(row?.docointkey || "").trim()).filter(Boolean)),
+        new Set(
+          docKeyRows
+            .map((row) => String(row?.docointkey || "").trim())
+            .filter(Boolean),
+        ),
       );
     };
 
@@ -985,7 +989,11 @@ async function getPatientUploadedFiles(req, res, next) {
     const mergedFiles = [];
     const seenKeys = new Set();
 
-    for (const fileRow of [...docointkeyFiles, ...encounterFiles, ...patientFiles]) {
+    for (const fileRow of [
+      ...docointkeyFiles,
+      ...encounterFiles,
+      ...patientFiles,
+    ]) {
       const key = [
         fileRow?.id,
         fileRow?.storage_path,
