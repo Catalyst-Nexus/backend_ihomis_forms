@@ -175,7 +175,7 @@ async function getOrdersForEncounter(req, res, next) {
     // 'all' returns all orders without type filter
 
     // Handle status filter - support both "all" and specific statuses
-    // Note: estatus values in the database are 'U', null, etc.
+    // Note: procstat values in the database are 'U', null, etc.
     const applyStatusFilter =
       status && status !== "all" && status.trim() !== "";
 
@@ -256,7 +256,7 @@ async function getOrdersForEncounter(req, res, next) {
         DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS dodate,
         DATE_FORMAT(hdocord.dodate, '%Y-%m-%d') AS ordate,
         DATE_FORMAT(hdocord.dotime, '%H:%i:%s') AS ortime,
-        hdocord.estatus,
+        hprocm.procstat,
         henctr.hpercode,
         hperson.patlast,
         hperson.patfirst,
@@ -278,7 +278,7 @@ async function getOrdersForEncounter(req, res, next) {
       `;
 
       if (applyStatusFilter) {
-        query += " AND hdocord.estatus = ?";
+        query += " AND hprocm.procstat = ?";
         params.push(status);
       }
 
@@ -301,7 +301,7 @@ async function getOrdersForEncounter(req, res, next) {
       if (resolvedHpercode) {
         const params = [resolvedHpercode];
         const statusCondition = applyStatusFilter
-          ? "AND hdocord.estatus = ?"
+          ? "AND hprocm.procstat = ?"
           : "";
         if (applyStatusFilter) {
           params.push(status);
@@ -667,7 +667,7 @@ async function debugSampleData(req, res, next) {
 
     // Get sample hdocord rows with orcode
     const [sampleHdocord] = await pool.query(
-      `SELECT enccode, docointkey, orcode, dodate, estatus 
+      `SELECT enccode, docointkey, orcode, dodate,
        FROM hdocord 
        WHERE orcode IS NOT NULL AND orcode != '' 
        LIMIT 10`,

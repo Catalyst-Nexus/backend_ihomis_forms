@@ -548,7 +548,7 @@ async function checkOrderClearance(enccode, serviceCode) {
     ]);
 
     const statusColumn = await findFirstExistingColumn("hdocord", [
-      "estatus",
+      "procstat",
       "ordstatus",
       "status",
       "clearance_status",
