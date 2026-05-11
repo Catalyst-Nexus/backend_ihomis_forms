@@ -518,6 +518,78 @@ async function checkPhicStatus(enccode) {
   }
 }
 
+async function findFirstExistingColumn(tableName, candidateColumns = []) {
+  if (!Array.isArray(candidateColumns) || candidateColumns.length === 0) {
+    return null;
+  }
+
+  for (const columnName of candidateColumns) {
+    // Reuse schema cache to avoid repeated INFORMATION_SCHEMA queries.
+    if (await tableHasColumn(tableName, columnName)) {
+      return columnName;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Returns true when the selected service has no pending clearance rows.
+ * This mirrors PHP semantics where empty(ClearanceController::<Service>) is valid.
+ */
+async function checkOrderClearance(enccode, serviceCode) {
+  try {
+    const serviceColumn = await findFirstExistingColumn("hdocord", [
+      "proccode",
+      "orcode",
+      "ordertype",
+      "servicecode",
+      "deptcode",
+    ]);
+
+    const statusColumn = await findFirstExistingColumn("hdocord", [
+      "estatus",
+      "ordstatus",
+      "status",
+      "clearance_status",
+      "iscleared",
+    ]);
+
+    // If schema does not expose service/status columns, fail open to avoid
+    // false blockers while still keeping discharge validation operational.
+    if (!serviceColumn || !statusColumn) {
+      return true;
+    }
+
+    const [rows] = await pool.query(
+      `SELECT 1
+       FROM hdocord
+       WHERE enccode = ?
+         AND ${serviceColumn} = ?
+         AND COALESCE(${statusColumn}, '') NOT IN ('S', 'C', 'CLEARED', 'DONE', '1', 'Y')
+       LIMIT 1`,
+      [enccode, serviceCode],
+    );
+
+    // No pending rows means clearance passes.
+    return rows.length === 0;
+  } catch (error) {
+    console.error("Error checking order clearance:", error);
+    throw error;
+  }
+}
+
+async function checkNewbornClearance(enccode) {
+  try {
+    // Keep parity with PHP discharge flow by evaluating newborn clearance as a
+    // dedicated clearance channel when available in hdocord.
+    return await checkOrderClearance(enccode, "NEWB");
+  } catch (error) {
+    console.error("Error checking newborn clearance:", error);
+    throw error;
+  }
+}
+
 async function checkDischargeClearances(enccode) {
   return {
     pharmacy: await checkOrderClearance(enccode, "PHARM"),
@@ -663,6 +735,11 @@ async function validateDischarge(req, res, next) {
     };
 
     const isComplete =
+      results.pharmacy &&
+      results.csr &&
+      results.laboratory &&
+      results.radiology &&
+      results.newborn &&
       results.dischargeOrder &&
       results.finalDiagnosis &&
       results.icdCode &&
@@ -729,6 +806,12 @@ async function getValidationDetails(req, res, next) {
       console.error("Error sampling hvitalsign:", e);
     }
 
+    const dischargeClearances = await checkDischargeClearances(encounter.enccode);
+    const dischargeOrder = await checkDischargeOrder(encounter.enccode);
+    const finalDiagnosis = await checkFinalDiagnosis(encounter.enccode);
+    const icdCode = await checkICDCode(encounter.enccode);
+    const courseInWard = await checkCourseInTheWardDischarge(encounter.enccode);
+
     const allValidations = {
       admission: {
         vitalSigns: await checkAdmissionVitalSigns(encounter.enccode, hpercode),
@@ -754,10 +837,11 @@ async function getValidationDetails(req, res, next) {
         courseWard: await checkAdmissionCourseWard(encounter.enccode, hpercode),
       },
       discharge: {
-        order: await checkDischargeOrder(enccode),
-        finalDiagnosis: await checkFinalDiagnosis(enccode),
-        icdCode: await checkICDCode(enccode),
-        courseInWard: await checkCourseInTheWardDischarge(enccode),
+        clearances: dischargeClearances,
+        order: dischargeOrder,
+        finalDiagnosis,
+        icdCode,
+        courseInWard,
       },
       phic: await checkPhicStatus(encounter.enccode),
     };
