@@ -278,7 +278,7 @@ async function getOrdersForEncounter(req, res, next) {
       `;
 
       if (applyStatusFilter) {
-        query += " AND hprocm.procstat = ?";
+        query += " AND hdocord.estatus = ?";
         params.push(status);
       }
 
@@ -301,7 +301,7 @@ async function getOrdersForEncounter(req, res, next) {
       if (resolvedHpercode) {
         const params = [resolvedHpercode];
         const statusCondition = applyStatusFilter
-          ? "AND hprocm.procstat = ?"
+          ? "AND hdocord.estatus = ?"
           : "";
         if (applyStatusFilter) {
           params.push(status);
