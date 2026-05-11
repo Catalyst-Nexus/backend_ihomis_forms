@@ -21,15 +21,32 @@ const { createClient } = require("@supabase/supabase-js");
 // ── Supabase admin client (lazy init) ──────────────────────────
 let _supabaseAdmin = null;
 
+function getSupabaseConfig() {
+  const supabaseUrl = (
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    ""
+  ).trim();
+  const supabaseKey = (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_KEY ||
+    process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    ""
+  ).trim();
+
+  return { supabaseUrl, supabaseKey };
+}
+
 function getSupabaseAdmin() {
   if (_supabaseAdmin) return _supabaseAdmin;
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_ANON_KEY;
+  const { supabaseUrl, supabaseKey } = getSupabaseConfig();
 
   if (!supabaseUrl || !supabaseKey) {
     throw new Error(
-      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.",
+      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY). VITE_ variants are also supported.",
     );
   }
 
@@ -38,6 +55,44 @@ function getSupabaseAdmin() {
   });
 
   return _supabaseAdmin;
+}
+
+function getSupabaseStorageClient() {
+  const { supabaseUrl, supabaseKey } = getSupabaseConfig();
+
+  if (!supabaseUrl || !supabaseKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
+async function resolveUploadedFileUrl(supabase, bucketName, fileRow) {
+  const storagePath = String(fileRow?.storage_path || "").trim();
+  const storedUrl = String(fileRow?.file_url || "").trim();
+
+  if (!storagePath) {
+    return storedUrl;
+  }
+
+  try {
+    const { data } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(storagePath);
+    if (data?.publicUrl) {
+      return data.publicUrl;
+    }
+  } catch (error) {
+    console.warn(
+      "[getPatientUploadedFiles] Failed to resolve public URL for storage path:",
+      storagePath,
+      error?.message || error,
+    );
+  }
+
+  return storedUrl;
 }
 
 // ── MySQL validation helpers ────────────────────────────────────
@@ -485,30 +540,13 @@ async function registerLabResultUpload(req, res, next) {
         );
       }
 
-      // Build URL — prefer signed URL if configured
-      const useSigned =
-        String(process.env.SUPABASE_USE_SIGNED_URL || "true").toLowerCase() ===
-        "true";
-      const signedTtl = Number(process.env.SUPABASE_SIGNED_URL_TTL || 3600);
-
-      if (useSigned) {
-        const { data: signedData, error: signedError } = await supabase.storage
-          .from(bucketName)
-          .createSignedUrl(storagePath, signedTtl);
-
-        if (!signedError && signedData?.signedUrl) {
-          uploadedUrl = signedData.signedUrl;
-        }
-      }
-
-      if (!uploadedUrl) {
-        const { data: publicData } = supabase.storage
-          .from(bucketName)
-          .getPublicUrl(storagePath);
-        uploadedUrl =
-          publicData?.publicUrl ||
-          `https://${bucketName}.supabase.co/storage/v1/object/public/${storagePath}`;
-      }
+      // Public-only bucket path: always use the public URL
+      const { data: publicData } = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(storagePath);
+      uploadedUrl =
+        publicData?.publicUrl ||
+        `https://${bucketName}.supabase.co/storage/v1/object/public/${storagePath}`;
     } catch (supabaseError) {
       return res.status(502).json({
         ok: false,
@@ -542,10 +580,8 @@ async function registerLabResultUpload(req, res, next) {
         uploaded_by: uploadedBy || null,
         remarks: remarks || null,
         source: normalizedSource,
-        is_signed_url: useSigned,
-        url_expires_at: useSigned
-          ? new Date(Date.now() + signedTtl * 1000).toISOString()
-          : null,
+        is_signed_url: false,
+        url_expires_at: null,
       })
       .select()
       .single();
@@ -720,6 +756,12 @@ async function debugSampleData(req, res, next) {
  */
 async function getPatientUploadedFiles(req, res, next) {
   try {
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
+
     const { hpercode } = req.params;
     // URL-decode the enccode query parameter
     let enccode = req.query.enccode
@@ -741,60 +783,9 @@ async function getPatientUploadedFiles(req, res, next) {
       });
     }
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_ANON_KEY;
+    const { supabaseUrl, supabaseKey } = getSupabaseConfig();
 
     if (!supabaseUrl || !supabaseKey) {
-      return res.status(500).json({
-        ok: false,
-        message: "Supabase not configured",
-      });
-    }
-
-    // Build the REST API URL for the lab_result_uploads table
-    // Note: table uses 'created_at' not 'uploaded_at'
-    const encodedHpercode = encodeURIComponent(hpercode);
-    let apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?hpercode=eq.${encodedHpercode}&order=created_at.desc&limit=100`;
-
-    if (enccode) {
-      // enccode can contain special chars like / and :, must be properly encoded
-      const encodedEnccode = encodeURIComponent(enccode);
-      apiUrl += `&enccode=eq.${encodedEnccode}`;
-    }
-
-    console.log(
-      "[getPatientUploadedFiles] Calling Supabase:",
-      apiUrl.replace(supabaseKey, "***"),
-    );
-
-    const response = await fetch(apiUrl, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-        Prefer: "count=exact",
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(
-        "[getPatientUploadedFiles] Supabase REST API error:",
-        response.status,
-        errorText,
-      );
-      console.error(
-        "[getPatientUploadedFiles] Full URL:",
-        apiUrl.replace(supabaseKey, "***"),
-      );
-
-      // Treat ALL Supabase API errors as recoverable (table not found, RLS issues, etc.)
-      // If Supabase is down or table doesn't exist, return empty array gracefully
-      // This prevents the frontend from crashing when Supabase is not configured
-      console.warn(
-        "[getPatientUploadedFiles] Supabase returned error - returning empty array gracefully",
-      );
       return res.json({
         ok: true,
         hpercode,
@@ -802,30 +793,231 @@ async function getPatientUploadedFiles(req, res, next) {
         count: 0,
         data: [],
         _debug: {
-          supabaseStatus: response.status,
-          message: "Supabase table not configured yet",
+          message: "Supabase not configured",
         },
       });
     }
 
-    let files = [];
-    try {
-      files = await response.json();
-    } catch (jsonError) {
-      // Response was not valid JSON - log but return empty array
-      console.warn(
-        "[getPatientUploadedFiles] Response was not valid JSON:",
-        jsonError.message,
+    const bucketName =
+      process.env.SUPABASE_LAB_RESULTS_BUCKET ||
+      process.env.SUPABASE_LAB_BUCKET ||
+      "lab-results";
+
+    const normalizedEnccode = enccode ? String(enccode).trim() : "";
+    const decodeValue = (value) => {
+      try {
+        return decodeURIComponent(String(value));
+      } catch {
+        return String(value || "");
+      }
+    };
+
+    const matchesEnccode = (value) => {
+      if (!normalizedEnccode) {
+        return true;
+      }
+
+      const decoded = decodeValue(value).trim();
+      return (
+        decoded === normalizedEnccode ||
+        String(value || "").trim() === normalizedEnccode
       );
-      files = [];
+    };
+
+    const fetchDocointkeysForEncounter = async (encodedEncounter) => {
+      if (!encodedEncounter) {
+        return [];
+      }
+
+      const docKeyRows = [];
+
+      try {
+        const exactQuery = await pool.query(
+          `SELECT DISTINCT docointkey
+           FROM hdocord
+           WHERE enccode = ?
+             AND docointkey IS NOT NULL
+             AND docointkey != ''
+           LIMIT 200`,
+          [encodedEncounter],
+        );
+
+        docKeyRows.push(...(exactQuery[0] || []));
+      } catch (error) {
+        console.warn(
+          "[getPatientUploadedFiles] Failed exact hdocord docointkey lookup:",
+          error?.message || error,
+        );
+      }
+
+      if (!docKeyRows.length) {
+        try {
+          const prefixQuery = await pool.query(
+            `SELECT DISTINCT docointkey
+             FROM hdocord
+             WHERE enccode LIKE ?
+               AND docointkey IS NOT NULL
+               AND docointkey != ''
+             LIMIT 200`,
+            [`${encodedEncounter}%`],
+          );
+
+          docKeyRows.push(...(prefixQuery[0] || []));
+        } catch (error) {
+          console.warn(
+            "[getPatientUploadedFiles] Failed prefix hdocord docointkey lookup:",
+            error?.message || error,
+          );
+        }
+      }
+
+      return Array.from(
+        new Set(
+          docKeyRows
+            .map((row) => String(row?.docointkey || "").trim())
+            .filter(Boolean),
+        ),
+      );
+    };
+
+    const fetchSupabaseFiles = async (queryParts, label) => {
+      const query = queryParts.join("&");
+      const apiUrl = `${supabaseUrl}/rest/v1/lab_result_uploads?${query}&order=created_at.desc&limit=100`;
+
+      console.log(
+        `[getPatientUploadedFiles] Calling Supabase (${label}):`,
+        apiUrl.replace(supabaseKey, "***"),
+      );
+
+      const response = await fetch(apiUrl, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+          Prefer: "count=exact",
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          `[getPatientUploadedFiles] Supabase REST API error (${label}):`,
+          response.status,
+          errorText,
+        );
+        return [];
+      }
+
+      try {
+        const payload = await response.json();
+        return Array.isArray(payload) ? payload : [];
+      } catch (jsonError) {
+        console.warn(
+          `[getPatientUploadedFiles] Response was not valid JSON (${label}):`,
+          jsonError.message,
+        );
+        return [];
+      }
+    };
+
+    const encodedHpercode = encodeURIComponent(hpercode);
+    const patientFiles = await fetchSupabaseFiles(
+      [`hpercode=eq.${encodedHpercode}`],
+      "patient",
+    );
+
+    let encounterFiles = [];
+    if (normalizedEnccode) {
+      const encodedEnccode = encodeURIComponent(normalizedEnccode);
+      encounterFiles = await fetchSupabaseFiles(
+        [`enccode=eq.${encodedEnccode}`],
+        "encounter",
+      );
     }
+
+    let docointkeyFiles = [];
+    if (normalizedEnccode) {
+      const docointkeys = await fetchDocointkeysForEncounter(normalizedEnccode);
+
+      if (docointkeys.length > 0) {
+        const inList = docointkeys
+          .map((value) => String(value).replace(/,/g, "\\,").trim())
+          .filter(Boolean)
+          .join(",");
+
+        if (inList) {
+          docointkeyFiles = await fetchSupabaseFiles(
+            [`docointkey=in.(${encodeURIComponent(inList)})`],
+            "docointkey",
+          );
+        }
+      }
+    }
+
+    const mergedFiles = [];
+    const seenKeys = new Set();
+
+    for (const fileRow of [
+      ...docointkeyFiles,
+      ...encounterFiles,
+      ...patientFiles,
+    ]) {
+      const key = [
+        fileRow?.id,
+        fileRow?.storage_path,
+        fileRow?.file_name,
+        fileRow?.docointkey,
+        fileRow?.created_at,
+      ]
+        .filter(Boolean)
+        .join("|");
+
+      if (!key || seenKeys.has(key)) {
+        continue;
+      }
+
+      seenKeys.add(key);
+      mergedFiles.push(fileRow);
+    }
+
+    let filesToReturn = mergedFiles;
+    const storageClient = getSupabaseStorageClient();
+    const resolvedFiles = await Promise.all(
+      filesToReturn.map(async (fileRow) => {
+        let refreshedUrl = String(fileRow?.file_url || "").trim();
+
+        if (storageClient) {
+          refreshedUrl =
+            (await resolveUploadedFileUrl(
+              storageClient,
+              bucketName,
+              fileRow,
+            )) || refreshedUrl;
+        }
+
+        return {
+          ...fileRow,
+          file_url: refreshedUrl || fileRow?.file_url || null,
+          uploadedPdfUrl: refreshedUrl || fileRow?.file_url || null,
+        };
+      }),
+    );
 
     return res.json({
       ok: true,
       hpercode,
       enccode: enccode || null,
-      count: files?.length || 0,
-      data: files || [],
+      count: resolvedFiles?.length || 0,
+      data: resolvedFiles || [],
+      _debug: normalizedEnccode
+        ? {
+            requestedEnccode: normalizedEnccode,
+            encounterMatches: encounterFiles.length,
+            patientMatches: patientFiles.length,
+            returnedFiles: resolvedFiles.length,
+          }
+        : undefined,
     });
   } catch (error) {
     console.error("getPatientUploadedFiles error:", error);
