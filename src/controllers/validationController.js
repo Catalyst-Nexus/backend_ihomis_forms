@@ -620,22 +620,19 @@ async function runFormValidations(req, res, next) {
 }
 
 module.exports = {
+  // Main Supabase-backed API endpoints
+  listHospitalForms,
+  listValidations,
+  getFormValidations,
+  createFormValidatorMapping,
+  createFormValidation,
+  deleteFormValidation,
+  runFormValidations,
+  
+  // Legacy admin endpoints (kept for backward compatibility)
   validateAdmission,
-  validateDischarge,
-  getValidationDetails,
-  checkHistory,
-  validatePhic,
-  // Export internal functions for testing or other controllers
-  checkAdmissionVitalSigns,
-  checkAdmissionBMI,
-  checkAdmissionHistory,
   checkAdmissionHistoryOB,
   checkAdmissionPrenatal,
-  checkAdmissionPertinentSignSymptoms,
-  checkAdmissionPhysicalExam,
-  checkAdmissionSystemReview,
-  checkAdmissionCourseWard,
-  checkCourseInTheWardDischarge,
   checkDischargeOrder,
   checkFinalDiagnosis,
   checkICDCode,
