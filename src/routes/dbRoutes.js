@@ -27,7 +27,6 @@ const {
 const {
   getOrdersForEncounter,
   registerLabResultUpload,
-  softDeleteLabResult,
   debugSchema,
   debugSampleData,
   getPatientUploadedFiles,
@@ -142,7 +141,5 @@ router.post(
   labUploadMulter.single("file"),
   registerLabResultUpload,
 );
-
-router.patch("/lab-results/:id/soft-delete", softDeleteLabResult);
 
 module.exports = router;
