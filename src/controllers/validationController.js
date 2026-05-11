@@ -43,43 +43,52 @@ async function hasRecordByEnccode({ table, enccode, where = '', params = [] }) {
 
 async function hasRecordByHpercode({ table, hpercode, where = '', params = [] }) {
   try {
-    const serviceColumn = await findFirstExistingColumn("hdocord", [
-      "proccode",
-      "orcode",
-      "ordertype",
-      "servicecode",
-      "deptcode",
-    ]);
+    // Special-case clearance checks stored in `hdocord` table: try to
+    // detect service/status columns and ensure there are no pending rows.
+    if (table === 'hdocord') {
+      const serviceColumn = await findFirstExistingColumn('hdocord', ['proccode', 'orcode', 'ordertype', 'servicecode', 'deptcode']);
+      const statusColumn = await findFirstExistingColumn('hdocord', ['procstat', 'ordstatus', 'status', 'clearance_status', 'iscleared']);
 
-    const statusColumn = await findFirstExistingColumn("hdocord", [
-      "procstat",
-      "ordstatus",
-      "status",
-      "clearance_status",
-      "iscleared",
-    ]);
+      // If schema does not expose service/status columns, return true to
+      // avoid false blocking of discharge flows in legacy schemas.
+      if (!serviceColumn || !statusColumn) return true;
 
-    // If schema does not expose service/status columns, fail open to avoid
-    // false blockers while still keeping discharge validation operational.
-    if (!serviceColumn || !statusColumn) {
-      return true;
+      const [rows] = await pool.query(
+        `SELECT 1
+         FROM hdocord
+         WHERE hpercode = ?
+           AND COALESCE(${statusColumn}, '') NOT IN ('S', 'C', 'CLEARED', 'DONE', '1', 'Y')
+         LIMIT 1`,
+        [hpercode],
+      );
+      // If any pending rows exist the check fails; return true when none found.
+      return rows.length === 0;
     }
 
-    const [rows] = await pool.query(
-      `SELECT 1
-       FROM hdocord
-       WHERE enccode = ?
-         AND ${serviceColumn} = ?
-         AND COALESCE(${statusColumn}, '') NOT IN ('S', 'C', 'CLEARED', 'DONE', '1', 'Y')
-       LIMIT 1`,
-      [enccode, serviceCode],
-    );
-
-    // No pending rows means clearance passes.
-    return rows.length === 0;
+    // Generic lookup by hpercode for other tables.
+    const [rows] = await pool.query(`SELECT 1 FROM ${table} WHERE hpercode = ?${where} LIMIT 1`, [hpercode, ...params]);
+    return rows.length > 0;
   } catch (error) {
     console.error(`Error checking ${table} by hpercode:`, error);
     return false;
+  }
+}
+
+// Find the first existing column name from a list of candidate column names
+// for a given table. Returns the column name or null.
+async function findFirstExistingColumn(tableName, candidates = []) {
+  try {
+    for (const col of candidates) {
+      const [rows] = await pool.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1`,
+        [tableName, col],
+      );
+      if (rows && rows.length > 0) return col;
+    }
+    return null;
+  } catch (err) {
+    console.error('findFirstExistingColumn error:', err);
+    return null;
   }
 }
 
