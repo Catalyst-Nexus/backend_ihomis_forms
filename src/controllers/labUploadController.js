@@ -1031,9 +1031,46 @@ async function getPatientUploadedFiles(req, res, next) {
   }
 }
 
+async function softDeleteLabResult(req, res, next) {
+  try {
+    const rawId = req.params?.id;
+    const id = Number.parseInt(String(rawId || ""), 10);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok: false, message: "Valid upload id is required" });
+    }
+
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from("lab_result_uploads")
+      .update({ is_active: false })
+      .eq("id", id)
+      .select("id, is_active")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ ok: false, message: "Upload record not found" });
+    }
+
+    return res.json({
+      ok: true,
+      id: data.id,
+      is_active: data.is_active,
+      message: "Upload soft-deleted successfully",
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getOrdersForEncounter,
   registerLabResultUpload,
+  softDeleteLabResult,
   debugSchema,
   debugSampleData,
   getPatientUploadedFiles,
