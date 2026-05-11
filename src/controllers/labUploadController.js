@@ -1037,7 +1037,9 @@ async function softDeleteLabResult(req, res, next) {
     const id = Number.parseInt(String(rawId || ""), 10);
 
     if (!Number.isInteger(id) || id <= 0) {
-      return res.status(400).json({ ok: false, message: "Valid upload id is required" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "Valid upload id is required" });
     }
 
     const supabase = getSupabaseAdmin();
@@ -1053,7 +1055,9 @@ async function softDeleteLabResult(req, res, next) {
     }
 
     if (!data) {
-      return res.status(404).json({ ok: false, message: "Upload record not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "Upload record not found" });
     }
 
     return res.json({
