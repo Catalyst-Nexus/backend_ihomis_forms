@@ -7,11 +7,17 @@ const {
   createFormValidation,
   deleteFormValidation,
   runFormValidations,
+  validateEncounter,
 } = require("../controllers/validationController");
 
 const router = express.Router();
 
-// Single validation runner endpoint (main API)
+// ===================== UNIVERSAL VALIDATION API =====================
+// POST /api/validation/validate - Validate any encounter against any validations
+// Body: { enccode, validationIds: [id1, id2, ...] }
+router.post('/validate', validateEncounter);
+
+// Single validation runner endpoint (form-specific)
 // POST /api/validation/run { formId, enccode }
 router.post('/run', runFormValidations);
 

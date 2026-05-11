@@ -228,236 +228,13 @@ async function findFirstExistingColumn(tableName, candidates = []) {
   }
 }
 
-async function checkAdmissionVitalSigns(enccode, hpercode = '') {
-  const foundByEnccode = await hasRecordByEnccode({ table: 'hvitalsign', enccode });
-  if (foundByEnccode) return true;
-  return await hasRecordByHpercode({ table: 'hvitalsign', hpercode });
-}
+// ❌ REMOVED: All hardcoded check* functions have been removed.
+// ✅ USE: Dynamic validation via Supabase configuration instead.
+// Validations are now defined in the 'validation' table and applied universally.
 
-async function checkAdmissionBMI(enccode, hpercode = '') {
-  const foundByEnccode = await hasRecordByEnccode({ table: 'hbmi', enccode });
-  if (foundByEnccode) return true;
-  return await hasRecordByHpercode({ table: 'hbmi', hpercode });
-}
-
-async function checkAdmissionHistory(enccode, histype, hpercode = '') {
-  const foundByEnccode = await hasRecordByEnccode({ table: 'hmrhisto', enccode, where: ' AND histype = ?', params: [histype] });
-  if (foundByEnccode) return true;
-  return await hasRecordByHpercode({ table: 'hmrhisto', hpercode, where: ' AND histype = ?', params: [histype] });
-}
-
-async function checkAdmissionHistoryOB(enccode, hpercode = '') {
-  const [admLog] = await pool.query('SELECT tscode FROM hadmlog WHERE enccode = ? LIMIT 1', [enccode]);
-  if (admLog.length === 0) return false;
-  if (admLog[0].tscode === 'S0005') {
-    const foundByEnccode = await hasRecordByEnccode({ table: 'hmrhistoob', enccode, where: ' AND obg IS NOT NULL AND oblmp IS NOT NULL' });
-    if (foundByEnccode) return true;
-    return await hasRecordByHpercode({ table: 'hmrhistoob', hpercode, where: ' AND obg IS NOT NULL AND oblmp IS NOT NULL' });
-  }
-  return true;
-}
-
-async function checkAdmissionPrenatal(enccode, hpercode = '') {
-  const [admLog] = await pool.query('SELECT tscode FROM hadmlog WHERE enccode = ? LIMIT 1', [enccode]);
-  if (admLog.length === 0) return false;
-  if (admLog[0].tscode === 'S0005') {
-    const foundByEnccode = await hasRecordByEnccode({ table: 'hprenatal', enccode, where: ' AND mcp IS NOT NULL AND prenataldte2 IS NOT NULL AND prenataldte3 IS NOT NULL AND prenataldte4 IS NOT NULL AND expectdeliverydte IS NOT NULL' });
-    if (foundByEnccode) return true;
-    return await hasRecordByHpercode({ table: 'hprenatal', hpercode, where: ' AND mcp IS NOT NULL AND prenataldte2 IS NOT NULL AND prenataldte3 IS NOT NULL AND prenataldte4 IS NOT NULL AND expectdeliverydte IS NOT NULL' });
-  }
-  return true;
-}
-
-async function checkAdmissionPertinentSignSymptoms(enccode, hpercode = '') {
-  const foundByEnccode = await hasRecordByEnccode({ table: 'hpertsign', enccode });
-  if (foundByEnccode) return true;
-  return await hasRecordByHpercode({ table: 'hpertsign', hpercode });
-}
-
-async function checkAdmissionPhysicalExam(enccode, hpercode = '') {
-  const foundByEnccode = await hasRecordByEnccode({ table: 'hphyexam', enccode });
-  if (foundByEnccode) return true;
-  return await hasRecordByHpercode({ table: 'hphyexam', hpercode });
-}
-
-async function checkAdmissionSystemReview(enccode, hpercode = '') {
-  const foundByEnccode = await hasRecordByEnccode({ table: 'hsysrev', enccode });
-  if (foundByEnccode) return true;
-  return await hasRecordByHpercode({ table: 'hsysrev', hpercode });
-}
-
-async function checkAdmissionCourseWard(enccode, hpercode = '') {
-  const foundByEnccode = await hasRecordByEnccode({ table: 'hcrsward', enccode });
-  if (foundByEnccode) return true;
-  return await hasRecordByHpercode({ table: 'hcrsward', hpercode });
-}
-
-async function checkCourseInTheWardDischarge(enccode) {
-  const [enctr] = await pool.query('SELECT toecode FROM henctr WHERE enccode = ? LIMIT 1', [enccode]);
-  if (enctr.length === 0) return false;
-  const { toecode } = enctr[0];
-  let admLog;
-  if (toecode === 'ADM') {
-    [admLog] = await pool.query('SELECT admdate, disdate FROM hadmlog WHERE enccode = ? LIMIT 1', [enccode]);
-  } else if (toecode === 'ER' || toecode === 'ERADM') {
-    [admLog] = await pool.query('SELECT erdate, erdtedis FROM herlog WHERE enccode = ? LIMIT 1', [enccode]);
-  } else if (toecode === 'OPD') {
-    [admLog] = await pool.query('SELECT opddate, opddtedis FROM hopdlog WHERE enccode = ? LIMIT 1', [enccode]);
-  } else {
-    return false;
-  }
-  if (admLog.length === 0) return false;
-  let admDate, disDate;
-  if (toecode === 'ADM') {
-    admDate = new Date(admLog[0].admdate);
-    disDate = admLog[0].disdate ? new Date(admLog[0].disdate) : null;
-  } else if (toecode === 'ER' || toecode === 'ERADM') {
-    admDate = new Date(admLog[0].erdate);
-    disDate = admLog[0].erdtedis ? new Date(admLog[0].erdtedis) : null;
-  } else {
-    admDate = new Date(admLog[0].opddate);
-    disDate = admLog[0].opddtedis ? new Date(admLog[0].opddtedis) : null;
-  }
-  const finalDate = disDate || new Date();
-  const daysDifference = Math.ceil((finalDate - admDate) / (1000 * 60 * 60 * 24));
-  for (let i = 0; i <= daysDifference; i++) {
-    const checkDate = new Date(admDate);
-    checkDate.setDate(checkDate.getDate() + i);
-    const dateStr = checkDate.toISOString().split('T')[0];
-    const [courseEntry] = await pool.query('SELECT * FROM hcrsward WHERE enccode = ? AND DATE(dtetake) = ? LIMIT 1', [enccode, dateStr]);
-    if (courseEntry.length === 0) return false;
-  }
-  return true;
-}
-
-async function checkDischargeOrder(enccode) {
-  const [enctr] = await pool.query('SELECT toecode FROM henctr WHERE enccode = ? LIMIT 1', [enccode]);
-  if (enctr.length === 0) return null;
-  const { toecode } = enctr[0];
-  if (toecode === 'ADM') {
-    const [rows] = await pool.query("SELECT dodate FROM hdocord WHERE orcode = 'DISCH' AND enccode = ? LIMIT 1", [enccode]);
-    return rows.length > 0 ? rows[0].dodate : null;
-  }
-  return 'Patient Done';
-}
-
-async function checkFinalDiagnosis(enccode) {
-  const [rows] = await pool.query(`SELECT diagtext FROM hencdiag WHERE tdcode = 'FINDX' AND enccode = ? AND primediag = 'Y' LIMIT 1`, [enccode]);
-  return rows.length > 0 ? rows[0].diagtext : null;
-}
-
-async function checkICDCode(enccode) {
-  const [rows] = await pool.query(`SELECT diagcode FROM hencdiag WHERE tdcode = 'FINDX' AND enccode = ? LIMIT 1`, [enccode]);
-  return rows.length > 0 ? rows[0].diagcode : null;
-}
-
-async function checkPhicStatus(enccode) {
-  const [henctr] = await pool.query('SELECT phicclaim FROM henctr WHERE enccode = ? LIMIT 1', [enccode]);
-  if (henctr.length === 0) return false;
-  if (henctr[0].phicclaim === 'Y') {
-    const [patCon] = await pool.query('SELECT nbb FROM hpatcon WHERE enccode = ? LIMIT 1', [enccode]);
-    if (patCon.length > 0) return patCon[0].nbb === 'Y';
-    return false;
-  }
-  return false;
-}
-
-// ===================== LEGACY VALIDATION ENDPOINTS =====================
-
-async function validateAdmission(req, res, next) {
-  try {
-    const { enccode: inputEnccode } = req.params;
-    const encounter = await resolveEncounterRecord(inputEnccode);
-    const hpercode = encounter.hpercode;
-    const results = {
-      enccode: encounter.enccode,
-      vitalSigns: await checkAdmissionVitalSigns(encounter.enccode, hpercode),
-      bmi: await checkAdmissionBMI(encounter.enccode, hpercode),
-      historyGDPPR: await checkAdmissionHistory(encounter.enccode, 'GDPPR', hpercode),
-      historyCOMPL: await checkAdmissionHistory(encounter.enccode, 'COMPL', hpercode),
-      historyPRHIS: await checkAdmissionHistory(encounter.enccode, 'PRHIS', hpercode),
-      historyPAHIS: await checkAdmissionHistory(encounter.enccode, 'PAHIS', hpercode),
-      historyOCENV: await checkAdmissionHistory(encounter.enccode, 'OCENV', hpercode),
-      historyFAHIS: await checkAdmissionHistory(encounter.enccode, 'FAHIS', hpercode),
-      historyDRTHE: await checkAdmissionHistory(encounter.enccode, 'DRTHE', hpercode),
-      historyALCOH: await checkAdmissionHistory(encounter.enccode, 'ALCOH', hpercode),
-      historyTOBAC: await checkAdmissionHistory(encounter.enccode, 'TOBAC', hpercode),
-      historyDRUGA: await checkAdmissionHistory(encounter.enccode, 'DRUGA', hpercode),
-      historyOTHAL: await checkAdmissionHistory(encounter.enccode, 'OTHAL', hpercode),
-      historyOB: await checkAdmissionHistoryOB(encounter.enccode, hpercode),
-      prenatal: await checkAdmissionPrenatal(encounter.enccode, hpercode),
-      pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(encounter.enccode, hpercode),
-      physicalExam: await checkAdmissionPhysicalExam(encounter.enccode, hpercode),
-      systemReview: await checkAdmissionSystemReview(encounter.enccode, hpercode),
-      courseWard: await checkAdmissionCourseWard(encounter.enccode, hpercode),
-    };
-    const isComplete = Object.entries(results).filter(([k]) => k !== 'enccode').every(([, v]) => v === true);
-    const missingFields = Object.entries(results).filter(([k, v]) => k !== 'enccode' && !v).map(([k]) => k);
-    res.json({ ok: true, enccode: inputEnccode, isComplete, details: results, missingFields });
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function validateDischarge(req, res, next) {
-  try {
-    const { enccode: inputEnccode } = req.params;
-    const encounter = await resolveEncounterRecord(inputEnccode);
-    const dischargeOrder = await checkDischargeOrder(encounter.enccode);
-    const finalDiagnosis = await checkFinalDiagnosis(encounter.enccode);
-    const icdCode = await checkICDCode(encounter.enccode);
-    const courseInWard = await checkCourseInTheWardDischarge(encounter.enccode);
-    const results = { enccode: encounter.enccode, dischargeOrder: !!dischargeOrder, finalDiagnosis: !!finalDiagnosis, icdCode: !!icdCode, courseInWard };
-    const isComplete = Object.entries(results).filter(([k]) => k !== 'enccode').every(([, v]) => v === true);
-    const missingFields = Object.entries(results).filter(([k, v]) => k !== 'enccode' && !v).map(([k]) => k);
-    res.json({ ok: true, enccode: inputEnccode, isComplete, details: { ...results, dischargeOrderDate: dischargeOrder || null, finalDiagnosisText: finalDiagnosis || null, icdCodeValue: icdCode || null }, missingFields });
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function getValidationDetails(req, res, next) {
-  try {
-    const { enccode: inputEnccode } = req.params;
-    const encounter = await resolveEncounterRecord(inputEnccode);
-    const hpercode = encounter.hpercode;
-    const allValidations = {
-      admission: {
-        vitalSigns: await checkAdmissionVitalSigns(encounter.enccode, hpercode),
-        bmi: await checkAdmissionBMI(encounter.enccode, hpercode),
-        histories: {
-          GDPPR: await checkAdmissionHistory(encounter.enccode, 'GDPPR', hpercode),
-          COMPL: await checkAdmissionHistory(encounter.enccode, 'COMPL', hpercode),
-          PRHIS: await checkAdmissionHistory(encounter.enccode, 'PRHIS', hpercode),
-          PAHIS: await checkAdmissionHistory(encounter.enccode, 'PAHIS', hpercode),
-          OCENV: await checkAdmissionHistory(encounter.enccode, 'OCENV', hpercode),
-          FAHIS: await checkAdmissionHistory(encounter.enccode, 'FAHIS', hpercode),
-          DRTHE: await checkAdmissionHistory(encounter.enccode, 'DRTHE', hpercode),
-          ALCOH: await checkAdmissionHistory(encounter.enccode, 'ALCOH', hpercode),
-          TOBAC: await checkAdmissionHistory(encounter.enccode, 'TOBAC', hpercode),
-          DRUGA: await checkAdmissionHistory(encounter.enccode, 'DRUGA', hpercode),
-          OTHAL: await checkAdmissionHistory(encounter.enccode, 'OTHAL', hpercode),
-        },
-        ob: await checkAdmissionHistoryOB(encounter.enccode, hpercode),
-        prenatal: await checkAdmissionPrenatal(encounter.enccode, hpercode),
-        pertinentSignSymptoms: await checkAdmissionPertinentSignSymptoms(encounter.enccode, hpercode),
-        physicalExam: await checkAdmissionPhysicalExam(encounter.enccode, hpercode),
-        systemReview: await checkAdmissionSystemReview(encounter.enccode, hpercode),
-        courseWard: await checkAdmissionCourseWard(encounter.enccode, hpercode),
-      },
-      discharge: {
-        order: await checkDischargeOrder(encounter.enccode),
-        finalDiagnosis: await checkFinalDiagnosis(encounter.enccode),
-        icdCode: await checkICDCode(encounter.enccode),
-        courseInWard: await checkCourseInTheWardDischarge(encounter.enccode),
-      },
-      phic: await checkPhicStatus(encounter.enccode),
-    };
-    res.json({ ok: true, enccode: inputEnccode, validation: allValidations });
-  } catch (error) {
-    next(error);
-  }
-}
+// ❌ REMOVED: Legacy hardcoded validation endpoints.
+// These endpoints (validateAdmission, validateDischarge, getValidationDetails) are no longer needed.
+// ✅ USE: /api/validation/run for all validations instead.
 
 // ===================== SUPABASE-BACKED ENDPOINTS =====================
 
@@ -607,6 +384,78 @@ async function runFormValidations(req, res, next) {
   }
 }
 
+// ===================== UNIVERSAL VALIDATION API =====================
+// Single endpoint that validates any enccode against any validations
+// This is schema-agnostic and purely data-driven from Supabase
+
+async function validateEncounter(req, res, next) {
+  try {
+    const { enccode: inputEnccode, validationIds = [] } = req.body || {};
+    if (!inputEnccode) return res.status(400).json({ ok: false, error: 'enccode required' });
+    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
+
+    const validationContext = await resolveEncounterDetails(inputEnccode);
+    const context = {
+      enccode: validationContext.encounter.enccode,
+      hpercode: validationContext.encounter.hpercode,
+      toecode: validationContext.encounterType,
+      matchedBy: validationContext.encounter.matchedBy,
+      phicclaim: validationContext.henctr?.phicclaim || '',
+    };
+
+    // If specific validationIds provided, load only those
+    let validations = [];
+    if (validationIds.length > 0) {
+      const { data, error } = await supabase
+        .from('validation')
+        .select('id, description, query, created_at')
+        .in('id', validationIds);
+      if (error) throw error;
+      validations = data || [];
+    } else {
+      // Otherwise, return validation context without running any
+      return res.json({
+        ok: true,
+        enccode: inputEnccode,
+        encounter: {
+          requestedEnccode: inputEnccode,
+          resolvedEnccode: validationContext.encounter.enccode,
+          hpercode: validationContext.encounter.hpercode,
+          toecode: validationContext.encounterType,
+          matchedBy: validationContext.encounter.matchedBy,
+        },
+        validationContext: context,
+        results: [],
+        summary: { total: 0, passed: 0, failed: 0, allPassed: true, missing: [] },
+      });
+    }
+
+    const results = [];
+    for (const validation of validations) {
+      results.push(await executeMappedValidation(validation, context));
+    }
+
+    const summary = summarizeValidationResults(results);
+
+    res.json({
+      ok: true,
+      enccode: inputEnccode,
+      encounter: {
+        requestedEnccode: inputEnccode,
+        resolvedEnccode: validationContext.encounter.enccode,
+        hpercode: validationContext.encounter.hpercode,
+        toecode: validationContext.encounterType,
+        matchedBy: validationContext.encounter.matchedBy,
+      },
+      validationContext: context,
+      results,
+      summary,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listHospitalForms,
   listValidations,
@@ -615,4 +464,5 @@ module.exports = {
   createFormValidation,
   deleteFormValidation,
   runFormValidations,
+  validateEncounter,
 };
