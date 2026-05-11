@@ -1,5 +1,94 @@
 const pool = require("../config/db");
 
+const columnCache = new Map();
+
+async function tableHasColumn(tableName, columnName) {
+  const cacheKey = `${tableName}.${columnName}`;
+  if (columnCache.has(cacheKey)) {
+    return columnCache.get(cacheKey);
+  }
+
+  const [rows] = await pool.query(
+    `SELECT COUNT(*) AS total
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?`,
+    [tableName, columnName],
+  );
+
+  const exists = Number(rows?.[0]?.total || 0) > 0;
+  columnCache.set(cacheKey, exists);
+  return exists;
+}
+
+async function resolveEncounterRecord(enccode) {
+  if (!enccode) {
+    return {
+      enccode: "",
+      hpercode: "",
+      toecode: "",
+      matchedBy: "none",
+    };
+  }
+
+  const [exactRows] = await pool.query(
+    "SELECT enccode, hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1",
+    [enccode],
+  );
+
+  if (exactRows.length > 0) {
+    return {
+      enccode: exactRows[0].enccode || enccode,
+      hpercode: exactRows[0].hpercode || "",
+      toecode: exactRows[0].toecode || "",
+      matchedBy: "exact",
+    };
+  }
+
+  const baseEnccode = enccode.split("/")[0];
+  const [prefixRows] = await pool.query(
+    "SELECT enccode, hpercode, toecode FROM henctr WHERE enccode LIKE CONCAT(?, '/%') LIMIT 1",
+    [baseEnccode],
+  );
+
+  if (prefixRows.length > 0) {
+    return {
+      enccode: prefixRows[0].enccode || enccode,
+      hpercode: prefixRows[0].hpercode || "",
+      toecode: prefixRows[0].toecode || "",
+      matchedBy: "prefix",
+    };
+  }
+
+  return {
+    enccode,
+    hpercode: "",
+    toecode: "",
+    matchedBy: "none",
+  };
+}
+
+async function resolveHpercode(enccode) {
+  const record = await resolveEncounterRecord(enccode);
+  return record.hpercode;
+}
+
+async function hasRecordByEnccode({ table, enccode, where = "", params = [] }) {
+  const sql = `SELECT 1 FROM ${table} WHERE enccode = ?${where} LIMIT 1`;
+  const [rows] = await pool.query(sql, [enccode, ...params]);
+  return rows.length > 0;
+}
+
+async function hasRecordByHpercode({ table, hpercode, where = "", params = [] }) {
+  if (!hpercode) return false;
+  const hasColumn = await tableHasColumn(table, "hpercode");
+  if (!hasColumn) return false;
+  const sql = `SELECT 1 FROM ${table} WHERE hpercode = ?${where} LIMIT 1`;
+  const [rows] = await pool.query(sql, [hpercode, ...params]);
+  return rows.length > 0;
+}
+
 /**
  * Check if admission vital signs exist for an encounter
  */
@@ -525,6 +614,21 @@ async function validateAdmission(req, res, next) {
       missingFields: Object.entries(results)
         .filter(([key, value]) => key !== "enccode" && !value)
         .map(([key]) => key),
+      DEBUG_INFO: {
+        timestamp: new Date().toISOString(),
+        enccode,
+        resolvedEnccode: encounter.enccode,
+        matchedBy: encounter.matchedBy,
+        hpercode,
+        toecode,
+        encounterExists: encounter.matchedBy !== "none",
+        sampleVitalSignsFound: sampleVitalSigns !== null,
+        sampleVitalSignsData: sampleVitalSigns,
+        totalChecks: Object.keys(results).length - 1,
+        passedChecks: Object.values(results).filter((v) => v === true).length,
+        failedChecks: Object.values(results).filter((v) => v === false).length,
+        note: "If matchedBy=prefix, the input enccode was a base code and the stored enccode includes a timestamp suffix.",
+      },
     });
   } catch (error) {
     console.error(`[ADMISSION ERROR] enccode=${req.params.enccode}:`, error);
@@ -539,11 +643,15 @@ async function validateAdmission(req, res, next) {
 async function validateDischarge(req, res, next) {
   try {
     const { enccode } = req.params;
+    const encounter = await resolveEncounterRecord(enccode);
 
-    const dischargeOrder = await checkDischargeOrder(enccode);
-    const finalDiagnosis = await checkFinalDiagnosis(enccode);
-    const icdCode = await checkICDCode(enccode);
-    const courseInWard = await checkCourseInTheWardDischarge(enccode);
+    console.log(`[DISCHARGE DEBUG] Processing enccode=${enccode}, resolvedEnccode=${encounter.enccode}, matchedBy=${encounter.matchedBy}`);
+
+    const clearances = await checkDischargeClearances(encounter.enccode);
+    const dischargeOrder = await checkDischargeOrder(encounter.enccode);
+    const finalDiagnosis = await checkFinalDiagnosis(encounter.enccode);
+    const icdCode = await checkICDCode(encounter.enccode);
+    const courseInWard = await checkCourseInTheWardDischarge(encounter.enccode);
 
     const results = {
       enccode,
@@ -580,6 +688,17 @@ async function validateDischarge(req, res, next) {
       missingFields: Object.entries(results)
         .filter(([key, value]) => key !== "enccode" && !value)
         .map(([key]) => key),
+      DEBUG_INFO: {
+        timestamp: new Date().toISOString(),
+        enccode,
+        resolvedEnccode: encounter.enccode,
+        matchedBy: encounter.matchedBy,
+        dischargeOrderFound: !!dischargeOrder,
+        finalDiagnosisFound: !!finalDiagnosis,
+        icdCodeFound: !!icdCode,
+        courseInWardStatus: courseInWard,
+        queryDetails: "Checking discharge order, final diagnosis, ICD code, and course in ward using resolved enccode",
+      },
     });
   } catch (error) {
     console.error(`[DISCHARGE ERROR] enccode=${req.params.enccode}:`, error);
