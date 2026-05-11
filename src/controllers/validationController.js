@@ -43,9 +43,40 @@ async function hasRecordByEnccode({ table, enccode, where = '', params = [] }) {
 
 async function hasRecordByHpercode({ table, hpercode, where = '', params = [] }) {
   try {
-    if (!hpercode) return false;
-    const [rows] = await pool.query(`SELECT 1 FROM ${table} WHERE hpercode = ?${where} LIMIT 1`, [hpercode, ...params]);
-    return rows.length > 0;
+    const serviceColumn = await findFirstExistingColumn("hdocord", [
+      "proccode",
+      "orcode",
+      "ordertype",
+      "servicecode",
+      "deptcode",
+    ]);
+
+    const statusColumn = await findFirstExistingColumn("hdocord", [
+      "procstat",
+      "ordstatus",
+      "status",
+      "clearance_status",
+      "iscleared",
+    ]);
+
+    // If schema does not expose service/status columns, fail open to avoid
+    // false blockers while still keeping discharge validation operational.
+    if (!serviceColumn || !statusColumn) {
+      return true;
+    }
+
+    const [rows] = await pool.query(
+      `SELECT 1
+       FROM hdocord
+       WHERE enccode = ?
+         AND ${serviceColumn} = ?
+         AND COALESCE(${statusColumn}, '') NOT IN ('S', 'C', 'CLEARED', 'DONE', '1', 'Y')
+       LIMIT 1`,
+      [enccode, serviceCode],
+    );
+
+    // No pending rows means clearance passes.
+    return rows.length === 0;
   } catch (error) {
     console.error(`Error checking ${table} by hpercode:`, error);
     return false;
