@@ -1,6 +1,10 @@
 const { createClient } = require('@supabase/supabase-js');
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const supabaseUrl =
+  process.env.SUPABASE_INTERNAL_URL ||
+  process.env.SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  '';
 const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_KEY ||
@@ -17,6 +21,20 @@ if (!supabaseUrl || !supabaseKey) {
     VITE_SUPABASE_ANON_KEY: !!process.env.VITE_SUPABASE_ANON_KEY,
   });
 }
+
+console.log('Supabase client bootstrap:', {
+  urlPresent: Boolean(supabaseUrl),
+  urlHost: supabaseUrl ? (() => {
+    try {
+      return new URL(supabaseUrl).host;
+    } catch {
+      return 'invalid-url';
+    }
+  })() : 'missing',
+  serviceRoleKeyPresent: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+  backendSupabaseKeyPresent: Boolean(process.env.SUPABASE_KEY),
+  anonKeyPresent: Boolean(process.env.VITE_SUPABASE_ANON_KEY),
+});
 
 let supabase = null;
 if (supabaseUrl && supabaseKey) {

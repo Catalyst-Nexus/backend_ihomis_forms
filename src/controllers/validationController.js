@@ -20,6 +20,142 @@ async function resolveEncounterRecord(enccode) {
   return { enccode, hpercode: '', toecode: '', matchedBy: 'none' };
 }
 
+async function resolveEncounterDetails(enccode) {
+  const encounter = await resolveEncounterRecord(enccode);
+  if (!encounter.enccode) {
+    return {
+      encounter,
+      henctr: null,
+      admissionLog: null,
+      dischargeLog: null,
+      encounterType: '',
+    };
+  }
+
+  const [henctrRows] = await pool.query(
+    'SELECT enccode, hpercode, toecode, phicclaim FROM henctr WHERE enccode = ? LIMIT 1',
+    [encounter.enccode],
+  );
+
+  const henctr = henctrRows[0] || null;
+  const encounterType = henctr?.toecode || encounter.toecode || '';
+
+  let admissionLog = null;
+  let dischargeLog = null;
+
+  if (encounterType === 'ADM') {
+    const [admRows] = await pool.query(
+      'SELECT admdate, disdate, tscode FROM hadmlog WHERE enccode = ? LIMIT 1',
+      [encounter.enccode],
+    );
+    admissionLog = admRows[0] || null;
+  } else if (encounterType === 'ER' || encounterType === 'ERADM') {
+    const [erRows] = await pool.query(
+      'SELECT erdate, erdtedis FROM herlog WHERE enccode = ? LIMIT 1',
+      [encounter.enccode],
+    );
+    admissionLog = erRows[0] || null;
+  } else if (encounterType === 'OPD') {
+    const [opdRows] = await pool.query(
+      'SELECT opddate, opddtedis FROM hopdlog WHERE enccode = ? LIMIT 1',
+      [encounter.enccode],
+    );
+    admissionLog = opdRows[0] || null;
+  }
+
+  if (encounterType === 'ADM') {
+    const [disRows] = await pool.query(
+      'SELECT dodate, orcode, enccode FROM hdocord WHERE orcode = \'DISCH\' AND enccode = ? LIMIT 1',
+      [encounter.enccode],
+    );
+    dischargeLog = disRows[0] || null;
+  }
+
+  return {
+    encounter,
+    henctr,
+    admissionLog,
+    dischargeLog,
+    encounterType,
+  };
+}
+
+async function loadValidationForm(formId) {
+  if (!formId || !supabase || typeof supabase.from !== 'function') return null;
+  const { data, error } = await supabase
+    .from('hospital_forms')
+    .select('id, description, component_name, is_active')
+    .eq('id', formId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function loadFormValidations(formId) {
+  if (!formId || !supabase || typeof supabase.from !== 'function') return [];
+  const { data: mappings, error: mapErr } = await supabase.from('formvalidator').select('*').eq('formid', formId);
+  if (mapErr) throw mapErr;
+  const validationIds = (mappings || []).map((m) => m.validationid).filter(Boolean);
+  if (validationIds.length === 0) return [];
+
+  const { data: validations, error } = await supabase.from('validation').select('id, description, query, created_at').in('id', validationIds);
+  if (error) throw error;
+
+  const mappingsByValidationId = new Map((mappings || []).map((m) => [String(m.validationid), m]));
+  return (validations || []).map((validation) => {
+    const mapping = mappingsByValidationId.get(String(validation.id)) || null;
+    return {
+      ...validation,
+      mappingId: mapping?.id || null,
+    };
+  });
+}
+
+function summarizeValidationResults(results = []) {
+  const passed = results.filter((item) => item.success).length;
+  const failed = results.length - passed;
+  return {
+    total: results.length,
+    passed,
+    failed,
+    allPassed: failed === 0,
+    missing: results.filter((item) => !item.success).map((item) => item.description).filter(Boolean),
+  };
+}
+
+async function executeMappedValidation(validation, context) {
+  const preparedQuery = prepareQuery(validation.query, context);
+  let success = false;
+  let info = null;
+
+  try {
+    const [rows] = await pool.query(preparedQuery);
+    if (Array.isArray(rows)) {
+      info = {
+        rowCount: rows.length,
+        sample: rows.slice(0, 10),
+      };
+      success = rows.length > 0;
+    } else {
+      info = { result: rows };
+      success = Boolean(rows);
+    }
+  } catch (error) {
+    info = { error: error.message };
+    success = false;
+  }
+
+  return {
+    validationId: validation.id,
+    mappingId: validation.mappingId || null,
+    description: validation.description || '',
+    query: validation.query || '',
+    preparedQuery,
+    success,
+    info,
+  };
+}
+
 function prepareQuery(template, vars = {}) {
   if (!template) return template;
   const replacements = { enccode: vars.enccode || '', hpercode: vars.hpercode || '' };
@@ -327,23 +463,29 @@ async function getValidationDetails(req, res, next) {
 
 async function listHospitalForms(req, res, next) {
   try {
-    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
+    if (!supabase || typeof supabase.from !== 'function') {
+      return res.status(200).json({ ok: true, forms: [], source: 'fallback', warning: 'Supabase client not configured on server' });
+    }
     const { data, error } = await supabase.from('hospital_forms').select('id, description, component_name, is_active').order('id', { ascending: true });
     if (error) throw error;
-    res.json({ ok: true, forms: data || [] });
+    res.json({ ok: true, forms: data || [], source: 'supabase' });
   } catch (error) {
-    next(error);
+    console.error('listHospitalForms failed, returning fallback response:', error && error.message ? error.message : error);
+    res.status(200).json({ ok: true, forms: [], source: 'fallback', warning: error && error.message ? error.message : 'Supabase lookup failed' });
   }
 }
 
 async function listValidations(req, res, next) {
   try {
-    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
+    if (!supabase || typeof supabase.from !== 'function') {
+      return res.status(200).json({ ok: true, validations: [], source: 'fallback', warning: 'Supabase client not configured on server' });
+    }
     const { data, error } = await supabase.from('validation').select('id, description, query, created_at').order('id', { ascending: true });
     if (error) throw error;
-    res.json({ ok: true, validations: data || [] });
+    res.json({ ok: true, validations: data || [], source: 'supabase' });
   } catch (error) {
-    next(error);
+    console.error('listValidations failed, returning fallback response:', error && error.message ? error.message : error);
+    res.status(200).json({ ok: true, validations: [], source: 'fallback', warning: error && error.message ? error.message : 'Supabase lookup failed' });
   }
 }
 
@@ -352,20 +494,17 @@ async function getFormValidations(req, res, next) {
     const { formId } = req.params;
     if (!formId) return res.status(400).json({ ok: false, error: 'formId required' });
     if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
-    const { data: mappings, error: mapErr } = await supabase.from('formvalidator').select('*').eq('formid', formId);
-    if (mapErr) throw mapErr;
-    const validationIds = mappings.map(m => m.validationid).filter(Boolean);
-    let validations = [];
-    if (validationIds.length > 0) {
-      const { data, error } = await supabase.from('validation').select('*').in('id', validationIds);
-      if (error) throw error;
-      validations = data;
-    }
-    const validationsWithMapping = validations.map(v => {
-      const map = mappings.find(m => m.validationid === v.id);
-      return { ...v, mappingId: map ? map.id : null };
+    const [form, validations] = await Promise.all([
+      loadValidationForm(formId),
+      loadFormValidations(formId),
+    ]);
+    res.json({
+      ok: true,
+      formId,
+      form,
+      validations,
+      total: validations.length,
     });
-    res.json({ ok: true, formId, validations: validationsWithMapping });
   } catch (error) {
     next(error);
   }
@@ -416,36 +555,53 @@ async function runFormValidations(req, res, next) {
   try {
     const { formId, enccode: inputEnccode } = req.body || {};
     if (!formId || !inputEnccode) return res.status(400).json({ ok: false, error: 'formId and enccode required' });
-    const encounter = await resolveEncounterRecord(inputEnccode);
-    const enccode = encounter.enccode;
-    const hpercode = encounter.hpercode;
     if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
-    const { data: mappings, error: mapErr } = await supabase.from('formvalidator').select('*').eq('formid', formId);
-    if (mapErr) throw mapErr;
-    const validationIds = mappings.map(m => m.validationid).filter(Boolean);
-    let validations = [];
-    if (validationIds.length > 0) {
-      const { data, error } = await supabase.from('validation').select('*').in('id', validationIds);
-      if (error) throw error;
-      validations = data;
-    }
+    const [form, validationContext] = await Promise.all([
+      loadValidationForm(formId),
+      resolveEncounterDetails(inputEnccode),
+    ]);
+
+    const validations = await loadFormValidations(formId);
+    const context = {
+      enccode: validationContext.encounter.enccode,
+      hpercode: validationContext.encounter.hpercode,
+      toecode: validationContext.encounterType,
+      matchedBy: validationContext.encounter.matchedBy,
+      phicclaim: validationContext.henctr?.phicclaim || '',
+    };
+
     const results = [];
-    for (const v of validations) {
-      const mapping = mappings.find(m => m.validationid === v.id) || {};
-      const prepared = prepareQuery(v.query, { enccode, hpercode });
-      let success = false;
-      let info = null;
-      try {
-        const [rows] = await pool.query(prepared);
-        info = Array.isArray(rows) ? { rowCount: rows.length, sample: rows.slice(0, 10) } : { result: rows };
-        success = Array.isArray(rows) ? rows.length > 0 : Boolean(rows);
-      } catch (e) {
-        info = { error: e.message };
-        success = false;
-      }
-      results.push({ validationId: v.id, mappingId: mapping.id || null, description: v.description, query: v.query, preparedQuery: prepared, success, info });
+    for (const validation of validations) {
+      results.push(await executeMappedValidation(validation, context));
     }
-    res.json({ ok: true, formId, enccode, results });
+
+    const summary = summarizeValidationResults(results);
+
+    res.json({
+      ok: true,
+      formId,
+      form,
+      encounter: {
+        requestedEnccode: inputEnccode,
+        resolvedEnccode: validationContext.encounter.enccode,
+        hpercode: validationContext.encounter.hpercode,
+        toecode: validationContext.encounterType,
+        matchedBy: validationContext.encounter.matchedBy,
+        henctr: validationContext.henctr,
+        admissionLog: validationContext.admissionLog,
+        dischargeLog: validationContext.dischargeLog,
+      },
+      validationContext: {
+        enccode: context.enccode,
+        hpercode: context.hpercode,
+        toecode: context.toecode,
+        matchedBy: context.matchedBy,
+        phicclaim: context.phicclaim,
+      },
+      validations: results,
+      results,
+      summary,
+    });
   } catch (error) {
     next(error);
   }
