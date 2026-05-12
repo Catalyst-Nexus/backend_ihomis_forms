@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
 
 const supabaseUrl =
   process.env.SUPABASE_INTERNAL_URL ||
@@ -39,7 +40,11 @@ console.log('Supabase client bootstrap:', {
 let supabase = null;
 if (supabaseUrl && supabaseKey) {
   try {
-    supabase = createClient(supabaseUrl, supabaseKey);
+    supabase = createClient(supabaseUrl, supabaseKey, {
+      realtime: {
+        transport: ws
+      }
+    });
     console.log('Supabase client created (from src/config/supabase.js)');
   } catch (e) {
     console.error('Failed to create Supabase client:', e && e.message);
