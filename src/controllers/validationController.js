@@ -496,6 +496,25 @@ async function validateEncounter(req, res, next) {
   }
 }
 
+// Debug endpoint to test Supabase connectivity from the running backend
+async function debugSupabase(req, res, next) {
+  try {
+    if (!supabase || typeof supabase.from !== 'function') {
+      return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
+    }
+
+    // Try a minimal lookup against the `validation` table
+    const { data, error } = await supabase.from('validation').select('id').limit(1);
+    if (error) {
+      return res.status(500).json({ ok: false, error: error.message || String(error) });
+    }
+
+    res.json({ ok: true, data: data || [] });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   listHospitalForms,
   listValidations,
@@ -505,4 +524,5 @@ module.exports = {
   deleteFormValidation,
   runFormValidations,
   validateEncounter,
+  debugSupabase,
 };

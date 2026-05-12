@@ -21,6 +21,9 @@ router.post('/validate', validateEncounter);
 // POST /api/validation/run { formId, enccode }
 router.post('/run', runFormValidations);
 
+// Debug route to test Supabase connectivity from the backend
+router.get('/debug/supabase', require('../controllers/validationController').debugSupabase);
+
 // Admin endpoints for managing validation rules
 router.get('/forms', listHospitalForms);
 router.get('/validations', listValidations);
