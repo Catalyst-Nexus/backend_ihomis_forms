@@ -12,72 +12,89 @@ try {
 
 async function resolveEncounterRecord(enccode) {
   if (!enccode) return { enccode: '', hpercode: '', toecode: '', matchedBy: 'none' };
-  const [exactRows] = await pool.query('SELECT enccode, hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1', [enccode]);
-  if (exactRows.length > 0) return { enccode: exactRows[0].enccode, hpercode: exactRows[0].hpercode || '', toecode: exactRows[0].toecode || '', matchedBy: 'exact' };
-  const baseEnccode = enccode.split('/')[0];
-  const [prefixRows] = await pool.query("SELECT enccode, hpercode, toecode FROM henctr WHERE enccode LIKE CONCAT(?, '/%') LIMIT 1", [baseEnccode]);
-  if (prefixRows.length > 0) return { enccode: prefixRows[0].enccode, hpercode: prefixRows[0].hpercode || '', toecode: prefixRows[0].toecode || '', matchedBy: 'prefix' };
-  return { enccode, hpercode: '', toecode: '', matchedBy: 'none' };
+
+  try {
+    const [exactRows] = await pool.query('SELECT enccode, hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1', [enccode]);
+    if (exactRows.length > 0) return { enccode: exactRows[0].enccode, hpercode: exactRows[0].hpercode || '', toecode: exactRows[0].toecode || '', matchedBy: 'exact' };
+    const baseEnccode = enccode.split('/')[0];
+    const [prefixRows] = await pool.query("SELECT enccode, hpercode, toecode FROM henctr WHERE enccode LIKE CONCAT(?, '/%') LIMIT 1", [baseEnccode]);
+    if (prefixRows.length > 0) return { enccode: prefixRows[0].enccode, hpercode: prefixRows[0].hpercode || '', toecode: prefixRows[0].toecode || '', matchedBy: 'prefix' };
+    return { enccode, hpercode: '', toecode: '', matchedBy: 'none' };
+  } catch (error) {
+    console.warn('resolveEncounterRecord fallback due to DB lookup error:', error && error.message ? error.message : error);
+    return { enccode, hpercode: '', toecode: '', matchedBy: 'fallback' };
+  }
 }
 
 async function resolveEncounterDetails(enccode) {
-  const encounter = await resolveEncounterRecord(enccode);
-  if (!encounter.enccode) {
+  try {
+    const encounter = await resolveEncounterRecord(enccode);
+    if (!encounter.enccode) {
+      return {
+        encounter,
+        henctr: null,
+        admissionLog: null,
+        dischargeLog: null,
+        encounterType: '',
+      };
+    }
+
+    const [henctrRows] = await pool.query(
+      'SELECT enccode, hpercode, toecode, phicclaim FROM henctr WHERE enccode = ? LIMIT 1',
+      [encounter.enccode],
+    );
+
+    const henctr = henctrRows[0] || null;
+    const encounterType = henctr?.toecode || encounter.toecode || '';
+
+    let admissionLog = null;
+    let dischargeLog = null;
+
+    if (encounterType === 'ADM') {
+      const [admRows] = await pool.query(
+        'SELECT admdate, disdate, tscode FROM hadmlog WHERE enccode = ? LIMIT 1',
+        [encounter.enccode],
+      );
+      admissionLog = admRows[0] || null;
+    } else if (encounterType === 'ER' || encounterType === 'ERADM') {
+      const [erRows] = await pool.query(
+        'SELECT erdate, erdtedis FROM herlog WHERE enccode = ? LIMIT 1',
+        [encounter.enccode],
+      );
+      admissionLog = erRows[0] || null;
+    } else if (encounterType === 'OPD') {
+      const [opdRows] = await pool.query(
+        'SELECT opddate, opddtedis FROM hopdlog WHERE enccode = ? LIMIT 1',
+        [encounter.enccode],
+      );
+      admissionLog = opdRows[0] || null;
+    }
+
+    if (encounterType === 'ADM') {
+      const [disRows] = await pool.query(
+        'SELECT dodate, orcode, enccode FROM hdocord WHERE orcode = \'DISCH\' AND enccode = ? LIMIT 1',
+        [encounter.enccode],
+      );
+      dischargeLog = disRows[0] || null;
+    }
+
     return {
       encounter,
+      henctr,
+      admissionLog,
+      dischargeLog,
+      encounterType,
+    };
+  } catch (error) {
+    console.warn('resolveEncounterDetails fallback due to DB lookup error:', error && error.message ? error.message : error);
+    return {
+      encounter: { enccode: enccode || '', hpercode: '', toecode: '', matchedBy: 'fallback' },
       henctr: null,
       admissionLog: null,
       dischargeLog: null,
       encounterType: '',
     };
   }
-
-  const [henctrRows] = await pool.query(
-    'SELECT enccode, hpercode, toecode, phicclaim FROM henctr WHERE enccode = ? LIMIT 1',
-    [encounter.enccode],
-  );
-
-  const henctr = henctrRows[0] || null;
-  const encounterType = henctr?.toecode || encounter.toecode || '';
-
-  let admissionLog = null;
-  let dischargeLog = null;
-
-  if (encounterType === 'ADM') {
-    const [admRows] = await pool.query(
-      'SELECT admdate, disdate, tscode FROM hadmlog WHERE enccode = ? LIMIT 1',
-      [encounter.enccode],
-    );
-    admissionLog = admRows[0] || null;
-  } else if (encounterType === 'ER' || encounterType === 'ERADM') {
-    const [erRows] = await pool.query(
-      'SELECT erdate, erdtedis FROM herlog WHERE enccode = ? LIMIT 1',
-      [encounter.enccode],
-    );
-    admissionLog = erRows[0] || null;
-  } else if (encounterType === 'OPD') {
-    const [opdRows] = await pool.query(
-      'SELECT opddate, opddtedis FROM hopdlog WHERE enccode = ? LIMIT 1',
-      [encounter.enccode],
-    );
-    admissionLog = opdRows[0] || null;
-  }
-
-  if (encounterType === 'ADM') {
-    const [disRows] = await pool.query(
-      'SELECT dodate, orcode, enccode FROM hdocord WHERE orcode = \'DISCH\' AND enccode = ? LIMIT 1',
-      [encounter.enccode],
-    );
-    dischargeLog = disRows[0] || null;
-  }
-
-  return {
-    encounter,
-    henctr,
-    admissionLog,
-    dischargeLog,
-    encounterType,
-  };
 }
 
 async function loadValidationForm(formId) {
