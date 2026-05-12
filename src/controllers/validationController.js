@@ -8,6 +8,23 @@ try {
   console.warn('validationController: error checking supabase:', e && e.message);
 }
 
+// ===================== PERFORMANCE CACHE =====================
+// Cache for schema lookups to avoid repeated column existence checks
+const schemaCache = {};
+const CACHE_TTL = 3600000; // 1 hour in milliseconds
+
+function getCachedColumns(tableName) {
+  const entry = schemaCache[tableName];
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL) {
+    return entry.data;
+  }
+  return null;
+}
+
+function setCachedColumns(tableName, data) {
+  schemaCache[tableName] = { data, timestamp: Date.now() };
+}
+
 // ===================== HELPERS =====================
 
 async function resolveEncounterRecord(enccode) {
@@ -230,6 +247,10 @@ async function hasRecordByHpercode({ table, hpercode, where = '', params = [] })
 // Find the first existing column name from a list of candidate column names
 // for a given table. Returns the column name or null.
 async function findFirstExistingColumn(tableName, candidates = []) {
+    // Check cache first
+    const cached = getCachedColumns(tableName);
+    if (cached) return cached;
+
   try {
     for (const col of candidates) {
       const [rows] = await pool.query(
@@ -238,7 +259,9 @@ async function findFirstExistingColumn(tableName, candidates = []) {
       );
       if (rows && rows.length > 0) return col;
     }
-    return null;
+    const result = null;
+    setCachedColumns(tableName, result);
+    return result;
   } catch (err) {
     console.error('findFirstExistingColumn error:', err);
     return null;
@@ -364,10 +387,10 @@ async function runFormValidations(req, res, next) {
       phicclaim: validationContext.henctr?.phicclaim || '',
     };
 
-    const results = [];
-    for (const validation of validations) {
-      results.push(await executeMappedValidation(validation, context));
-    }
+    // OPTIMIZATION: Execute all validations in parallel instead of sequentially
+    const results = await Promise.all(
+      validations.map(validation => executeMappedValidation(validation, context))
+    );
 
     const summary = summarizeValidationResults(results);
 
@@ -447,10 +470,10 @@ async function validateEncounter(req, res, next) {
       });
     }
 
-    const results = [];
-    for (const validation of validations) {
-      results.push(await executeMappedValidation(validation, context));
-    }
+    // OPTIMIZATION: Execute all validations in parallel instead of sequentially
+    const results = await Promise.all(
+      validations.map(validation => executeMappedValidation(validation, context))
+    );
 
     const summary = summarizeValidationResults(results);
 
