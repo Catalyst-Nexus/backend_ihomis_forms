@@ -1,12 +1,6 @@
 const pool = require('../config/db');
-const supabase = require('../config/supabase');
 const mysql = require('mysql2');
-
-try {
-  console.log('validationController loaded. supabase present:', !!supabase, 'hasFrom:', supabase && typeof supabase.from === 'function');
-} catch (e) {
-  console.warn('validationController: error checking supabase:', e && e.message);
-}
+const { mapPatientRow } = require('../utils/dbHelpers');
 
 // ===================== PERFORMANCE CACHE =====================
 // Cache for schema lookups to avoid repeated column existence checks
@@ -27,25 +21,86 @@ function setCachedColumns(tableName, data) {
 
 // ===================== HELPERS =====================
 
-async function resolveEncounterRecord(enccode) {
-  if (!enccode) return { enccode: '', hpercode: '', toecode: '', matchedBy: 'none' };
+async function resolveEncounterRecord(enccode, hpercode = '') {
+  const inputHpercode = String(hpercode || '').trim();
+  if (!enccode && !inputHpercode) return { enccode: '', hpercode: '', toecode: '', matchedBy: 'none' };
 
   try {
-    const [exactRows] = await pool.query('SELECT enccode, hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1', [enccode]);
-    if (exactRows.length > 0) return { enccode: exactRows[0].enccode, hpercode: exactRows[0].hpercode || '', toecode: exactRows[0].toecode || '', matchedBy: 'exact' };
-    const baseEnccode = enccode.split('/')[0];
-    const [prefixRows] = await pool.query("SELECT enccode, hpercode, toecode FROM henctr WHERE enccode LIKE CONCAT(?, '/%') LIMIT 1", [baseEnccode]);
-    if (prefixRows.length > 0) return { enccode: prefixRows[0].enccode, hpercode: prefixRows[0].hpercode || '', toecode: prefixRows[0].toecode || '', matchedBy: 'prefix' };
-    return { enccode, hpercode: '', toecode: '', matchedBy: 'none' };
+    // Normalize enccode: extract base part before any "/" or other separators
+    // e.g., "000502700000000000210705/24/202521:44:48" → "000502700000000000210705"
+    const baseEnccode = String(enccode).split('/')[0].trim();
+
+    if (!baseEnccode && inputHpercode) {
+      const [latestRows] = await pool.query(
+        `
+          SELECT
+            a.enccode,
+            a.hpercode,
+            a.toecode,
+            a.phicclaim
+          FROM henctr a
+          LEFT JOIN hadmlog b ON b.enccode = a.enccode
+          WHERE a.hpercode = ?
+          ORDER BY b.admdate DESC, b.admtime DESC, a.enccode DESC
+          LIMIT 1
+        `,
+        [inputHpercode],
+      );
+
+      if (latestRows.length > 0) {
+        return {
+          enccode: latestRows[0].enccode,
+          hpercode: latestRows[0].hpercode || inputHpercode,
+          toecode: latestRows[0].toecode || '',
+          matchedBy: 'latest-hpercode',
+        };
+      }
+
+      return { enccode: '', hpercode: inputHpercode, toecode: '', matchedBy: 'none' };
+    }
+    
+    if (!baseEnccode) {
+      return { enccode: '', hpercode: '', toecode: '', matchedBy: 'none' };
+    }
+
+    // Try exact match with base enccode
+    const [exactRows] = await pool.query('SELECT enccode, hpercode, toecode FROM henctr WHERE enccode = ? LIMIT 1', [baseEnccode]);
+    if (exactRows.length > 0) {
+      return { 
+        enccode: exactRows[0].enccode, 
+        hpercode: exactRows[0].hpercode || '', 
+        toecode: exactRows[0].toecode || '', 
+        matchedBy: 'exact' 
+      };
+    }
+
+    // Try prefix match: look for records starting with base enccode
+    const [prefixRows] = await pool.query(
+      "SELECT enccode, hpercode, toecode FROM henctr WHERE enccode LIKE CONCAT(?, '%') LIMIT 1", 
+      [baseEnccode]
+    );
+    if (prefixRows.length > 0) {
+      return { 
+        enccode: prefixRows[0].enccode, 
+        hpercode: prefixRows[0].hpercode || '', 
+        toecode: prefixRows[0].toecode || '', 
+        matchedBy: 'prefix' 
+      };
+    }
+
+    // Return base enccode if found
+    return { enccode: baseEnccode, hpercode: inputHpercode, toecode: '', matchedBy: 'none' };
   } catch (error) {
-    console.warn('resolveEncounterRecord fallback due to DB lookup error:', error && error.message ? error.message : error);
-    return { enccode, hpercode: '', toecode: '', matchedBy: 'fallback' };
+    console.warn('resolveEncounterRecord error:', error && error.message ? error.message : error);
+    // Return base enccode on error
+    const baseEnccode = String(enccode).split('/')[0].trim();
+    return { enccode: baseEnccode || enccode, hpercode: inputHpercode, toecode: '', matchedBy: 'fallback' };
   }
 }
 
-async function resolveEncounterDetails(enccode) {
+async function resolveEncounterDetails(enccode, hpercode = '') {
   try {
-    const encounter = await resolveEncounterRecord(enccode);
+    const encounter = await resolveEncounterRecord(enccode, hpercode);
     if (!encounter.enccode) {
       return {
         encounter,
@@ -114,6 +169,128 @@ async function resolveEncounterDetails(enccode) {
   }
 }
 
+async function fetchPatientDetails(hpercode) {
+  const normalizedHpercode = String(hpercode || '').trim();
+  if (!normalizedHpercode) return null;
+
+  const [rows] = await pool.query(
+    `
+      SELECT
+        p.hpercode,
+        p.patlast,
+        p.patfirst,
+        p.patmiddle,
+        p.patsuffix,
+        p.patsex,
+        p.patbdate,
+        p.hfhudcode,
+        p.patbplace,
+        p.patcstat,
+        p.natcode,
+        p.relcode,
+        p.bldtype,
+        p.patempstat,
+        fh.hfhudname AS facility_name,
+        a.brg AS bgycode,
+        a.patstr AS street,
+        a.ctycode AS city_code,
+        a.provcode AS province_code,
+        a.patzip AS zip_code,
+        b.bgyname,
+        c.ctyname,
+        pv.provname,
+        r.regname,
+        CONCAT_WS(', ', a.patstr, b.bgyname, c.ctyname, pv.provname, r.regname, a.patzip) AS patient_address,
+        (
+          SELECT ht.pattel
+          FROM htelep ht
+          WHERE ht.hpercode = p.hpercode
+          LIMIT 1
+        ) AS telephone_number,
+        (SELECT h.casenum FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS case_number,
+        (SELECT h.patage FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS age,
+        (SELECT h.admdate FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS admission_date,
+        (SELECT h.disdate FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS discharge_date,
+        (SELECT h.admtxt FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS chief_complaint,
+        (SELECT h.admnotes FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS admission_diagnosis,
+        (
+          SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
+          FROM hadmlog h
+          LEFT JOIN hprovider pr ON h.licno = pr.licno
+          LEFT JOIN hpersonal hp ON pr.employeeid = hp.employeeid
+          WHERE h.hpercode = p.hpercode
+          LIMIT 1
+        ) AS requesting_physician,
+        (
+          SELECT ph.phicnum
+          FROM hphiclog ph
+          WHERE ph.hpercode = p.hpercode
+          LIMIT 1
+        ) AS health_number,
+        (
+          SELECT rm.rmname
+          FROM hpatroom pr
+          LEFT JOIN hroom rm ON pr.rmintkey = rm.rmintkey
+          WHERE pr.hpercode = p.hpercode
+          LIMIT 1
+        ) AS room_name,
+        (
+          SELECT bd.bdname
+          FROM hpatroom pr
+          LEFT JOIN hbed bd ON pr.bdintkey = bd.bdintkey
+          WHERE pr.hpercode = p.hpercode
+          LIMIT 1
+        ) AS bed_name,
+        (
+          SELECT wd.wardname
+          FROM hpatroom pr
+          LEFT JOIN hward wd ON pr.wardcode = wd.wardcode
+          WHERE pr.hpercode = p.hpercode
+          LIMIT 1
+        ) AS ward_name,
+        (SELECT vs.vsbp FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS blood_pressure,
+        (SELECT vs.vstemp FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS temperature,
+        (SELECT vs.vspulse FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS pulse,
+        (SELECT vs.vsresp FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS resp,
+        (SELECT vs.o2sats FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS o2sats,
+        (SELECT vs.vsweight FROM hvsothr vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS weight,
+        (SELECT vs.vsheight FROM hvsothr vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS height,
+        (SELECT vs.vsbmi FROM hvsothr vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS bmi,
+        (SELECT vs.vsbmicat FROM hvsothr vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS bmi_category,
+        (SELECT h.disnotes FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS discharge_diagnosis,
+        (SELECT h.dispcode FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS disposition,
+        (SELECT h.condcode FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS 'condition',
+        (SELECT h.newold FROM hadmlog h WHERE h.hpercode = p.hpercode LIMIT 1) AS type_of_admission,
+        (SELECT vs.fetal_heart_rate FROM hvitalsign vs WHERE vs.hpercode = p.hpercode LIMIT 1) AS fetal_heart_rate,
+        (
+          SELECT CONCAT_WS(' ', hp.firstname, hp.middlename, hp.lastname)
+          FROM hadmlog h
+          LEFT JOIN hpersonal hp ON h.admclerk = hp.employeeid
+          WHERE h.hpercode = p.hpercode
+          LIMIT 1
+        ) AS admitting_clerk
+      FROM hperson p
+      LEFT JOIN haddr a ON p.hpercode = a.hpercode
+      LEFT JOIN hbrgy b ON a.brg = b.bgycode
+      LEFT JOIN hcity c ON a.ctycode = c.ctycode
+      LEFT JOIN hprov pv ON a.provcode = pv.provcode
+      LEFT JOIN hregion r ON c.ctyreg = r.regcode
+      LEFT JOIN fhud_hospital fh ON p.hfhudcode = fh.hfhudcode
+      WHERE p.hpercode = ?
+      LIMIT 1
+    `,
+    [normalizedHpercode],
+  );
+
+  const row = rows[0] || null;
+  if (!row) return null;
+
+  return {
+    ...mapPatientRow(row),
+    rawData: row,
+  };
+}
+
 async function loadValidationForm(formId) {
   if (!formId || !supabase || typeof supabase.from !== 'function') return null;
   const { data, error } = await supabase
@@ -125,123 +302,34 @@ async function loadValidationForm(formId) {
   return data || null;
 }
 
-async function loadFormValidations(formId) {
-  if (!formId || !supabase || typeof supabase.from !== 'function') return [];
-  const { data: mappings, error: mapErr } = await supabase.from('formvalidator').select('*').eq('formid', formId);
-  if (mapErr) throw mapErr;
-  const validationIds = (mappings || []).map((m) => m.validationid).filter(Boolean);
-  if (validationIds.length === 0) return [];
+function replaceValidationPlaceholder(query, placeholder, value) {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return query;
 
-  const { data: validations, error } = await supabase.from('validation').select('id, description, query, created_at').in('id', validationIds);
-  if (error) throw error;
+  const escapedValue = mysql.escape(normalizedValue);
+  const rawEscapedValue = escapedValue.slice(1, -1);
+  const placeholderName = String(placeholder || '').trim();
 
-  const mappingsByValidationId = new Map((mappings || []).map((m) => [String(m.validationid), m]));
-  return (validations || []).map((validation) => {
-    const mapping = mappingsByValidationId.get(String(validation.id)) || null;
-    return {
-      ...validation,
-      mappingId: mapping?.id || null,
-    };
+  if (!placeholderName) return query;
+
+  let result = query;
+
+  const quotedPatterns = [
+    new RegExp(`(['"])\\{\\{${placeholderName}\\}\\}\\1`, 'gi'),
+    new RegExp(`(['"])\\{${placeholderName}\\}\\1`, 'gi'),
+    new RegExp(`(['"])\\$${placeholderName.toUpperCase()}\\$\\1`, 'gi'),
+  ];
+
+  quotedPatterns.forEach((pattern) => {
+    result = result.replace(pattern, (match, quote) => `${quote}${rawEscapedValue}${quote}`);
   });
-}
 
-function summarizeValidationResults(results = []) {
-  const passed = results.filter((item) => item.success).length;
-  const failed = results.length - passed;
-  return {
-    total: results.length,
-    passed,
-    failed,
-    allPassed: failed === 0,
-    missing: results.filter((item) => !item.success).map((item) => item.description).filter(Boolean),
-  };
-}
+  const barePattern = new RegExp(
+    `\\{\\{${placeholderName}\\}\\}|\\{${placeholderName}\\}|\\$${placeholderName.toUpperCase()}\\$`,
+    'gi',
+  );
 
-async function executeMappedValidation(validation, context) {
-  const preparedQuery = prepareQuery(validation.query, context);
-  let success = false;
-  let info = null;
-
-  try {
-    const [rows] = await pool.query(preparedQuery);
-    if (Array.isArray(rows)) {
-      info = {
-        rowCount: rows.length,
-        sample: rows.slice(0, 10),
-      };
-      success = rows.length > 0;
-    } else {
-      info = { result: rows };
-      success = Boolean(rows);
-    }
-  } catch (error) {
-    info = { error: error.message };
-    success = false;
-  }
-
-  return {
-    validationId: validation.id,
-    mappingId: validation.mappingId || null,
-    description: validation.description || '',
-    query: validation.query || '',
-    preparedQuery,
-    success,
-    info,
-  };
-}
-
-function prepareQuery(template, vars = {}) {
-  if (!template) return template;
-  const replacements = { enccode: vars.enccode || '', hpercode: vars.hpercode || '' };
-  let q = template;
-  q = q.replace(/(["'])\s*(\{\{\s*enccode\s*\}\}|\$ENCCODE\$)\s*\1/gi, () => mysql.escape(replacements.enccode));
-  q = q.replace(/(["'])\s*(\{\{\s*hpercode\s*\}\}|\$HPERCODE\$)\s*\1/gi, () => mysql.escape(replacements.hpercode));
-  q = q.replace(/\$ENCCODE\$|{{\s*enccode\s*}}|\{\{enccode\}\}/gi, () => mysql.escape(replacements.enccode));
-  q = q.replace(/\$HPERCODE\$|{{\s*hpercode\s*}}|\{\{hpercode\}\}/gi, () => mysql.escape(replacements.hpercode));
-  return q;
-}
-
-async function hasRecordByEnccode({ table, enccode, where = '', params = [] }) {
-  try {
-    const [rows] = await pool.query(`SELECT 1 FROM ${table} WHERE enccode = ?${where} LIMIT 1`, [enccode, ...params]);
-    return rows.length > 0;
-  } catch (error) {
-    console.error(`Error checking ${table} by enccode:`, error);
-    return false;
-  }
-}
-
-async function hasRecordByHpercode({ table, hpercode, where = '', params = [] }) {
-  try {
-    // Special-case clearance checks stored in `hdocord` table: try to
-    // detect service/status columns and ensure there are no pending rows.
-    if (table === 'hdocord') {
-      const serviceColumn = await findFirstExistingColumn('hdocord', ['proccode', 'orcode', 'ordertype', 'servicecode', 'deptcode']);
-      const statusColumn = await findFirstExistingColumn('hdocord', ['procstat', 'ordstatus', 'status', 'clearance_status', 'iscleared']);
-
-      // If schema does not expose service/status columns, return true to
-      // avoid false blocking of discharge flows in legacy schemas.
-      if (!serviceColumn || !statusColumn) return true;
-
-      const [rows] = await pool.query(
-        `SELECT 1
-         FROM hdocord
-         WHERE hpercode = ?
-           AND COALESCE(${statusColumn}, '') NOT IN ('S', 'C', 'CLEARED', 'DONE', '1', 'Y')
-         LIMIT 1`,
-        [hpercode],
-      );
-      // If any pending rows exist the check fails; return true when none found.
-      return rows.length === 0;
-    }
-
-    // Generic lookup by hpercode for other tables.
-    const [rows] = await pool.query(`SELECT 1 FROM ${table} WHERE hpercode = ?${where} LIMIT 1`, [hpercode, ...params]);
-    return rows.length > 0;
-  } catch (error) {
-    console.error(`Error checking ${table} by hpercode:`, error);
-    return false;
-  }
+  return result.replace(barePattern, escapedValue);
 }
 
 // Find the first existing column name from a list of candidate column names
@@ -268,261 +356,193 @@ async function findFirstExistingColumn(tableName, candidates = []) {
   }
 }
 
-// ❌ REMOVED: All hardcoded check* functions have been removed.
-// ✅ USE: Dynamic validation via Supabase configuration instead.
-// Validations are now defined in the 'validation' table and applied universally.
+// ===================== CORE VALIDATION ENDPOINTS =====================
 
-// ❌ REMOVED: Legacy hardcoded validation endpoints.
-// These endpoints (validateAdmission, validateDischarge, getValidationDetails) are no longer needed.
-// ✅ USE: /api/validation/run for all validations instead.
-
-// ===================== SUPABASE-BACKED ENDPOINTS =====================
-
-async function listHospitalForms(req, res, next) {
+/**
+ * POST /api/validation/data
+ * Returns encounter data needed for frontend validation
+ * Input: { enccode }
+ * Output: { ok, data: { enccode, hpercode, toecode, matchedBy, phicclaim, henctr, admissionLog, dischargeLog } }
+ */
+async function getValidationData(req, res, next) {
   try {
-    if (!supabase || typeof supabase.from !== 'function') {
-      return res.status(200).json({ ok: true, forms: [], source: 'fallback', warning: 'Supabase client not configured on server' });
+    const { enccode: inputEnccode, hpercode: inputHpercode } = req.body || {};
+    if (!inputEnccode && !inputHpercode) {
+      return res.status(400).json({ ok: false, error: 'enccode or hpercode required' });
     }
-    const { data, error } = await supabase.from('hospital_forms').select('id, description, component_name, is_active').order('id', { ascending: true });
-    if (error) throw error;
-    res.json({ ok: true, forms: data || [], source: 'supabase' });
-  } catch (error) {
-    console.error('listHospitalForms failed, returning fallback response:', error && error.message ? error.message : error);
-    res.status(200).json({ ok: true, forms: [], source: 'fallback', warning: error && error.message ? error.message : 'Supabase lookup failed' });
-  }
-}
 
-async function listValidations(req, res, next) {
-  try {
-    if (!supabase || typeof supabase.from !== 'function') {
-      return res.status(200).json({ ok: true, validations: [], source: 'fallback', warning: 'Supabase client not configured on server' });
-    }
-    const { data, error } = await supabase.from('validation').select('id, description, query, created_at').order('id', { ascending: true });
-    if (error) throw error;
-    res.json({ ok: true, validations: data || [], source: 'supabase' });
-  } catch (error) {
-    console.error('listValidations failed, returning fallback response:', error && error.message ? error.message : error);
-    res.status(200).json({ ok: true, validations: [], source: 'fallback', warning: error && error.message ? error.message : 'Supabase lookup failed' });
-  }
-}
-
-async function getFormValidations(req, res, next) {
-  try {
-    const { formId } = req.params;
-    if (!formId) return res.status(400).json({ ok: false, error: 'formId required' });
-    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
-    const [form, validations] = await Promise.all([
-      loadValidationForm(formId),
-      loadFormValidations(formId),
-    ]);
-    res.json({
-      ok: true,
-      formId,
-      form,
-      validations,
-      total: validations.length,
-    });
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function createFormValidatorMapping(req, res, next) {
-  try {
-    const { formId, validationId } = req.body || {};
-    if (!formId || !validationId) return res.status(400).json({ ok: false, error: 'formId and validationId required' });
-    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
-    const { data, error } = await supabase.from('formvalidator').insert([{ formid: formId, validationid: validationId }]).select('*').single();
-    if (error) throw error;
-    res.json({ ok: true, mapping: data });
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function createFormValidation(req, res, next) {
-  try {
-    const { formId, description, query } = req.body;
-    if (!formId || !query) return res.status(400).json({ ok: false, error: 'formId and query required' });
-    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
-    const { data: validationData, error: valErr } = await supabase.from('validation').insert([{ description: description || null, query }]).select().single();
-    if (valErr) throw valErr;
-    const { data: mappingData, error: mapErr } = await supabase.from('formvalidator').insert([{ formid: formId, validationid: validationData.id }]).select().single();
-    if (mapErr) throw mapErr;
-    res.json({ ok: true, validation: validationData, mapping: mappingData });
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function deleteFormValidation(req, res, next) {
-  try {
-    const { id } = req.params;
-    if (!id) return res.status(400).json({ ok: false, error: 'mapping id required' });
-    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
-    const { error } = await supabase.from('formvalidator').delete().eq('id', id);
-    if (error) throw error;
-    res.json({ ok: true, deletedMappingId: id });
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function runFormValidations(req, res, next) {
-  try {
-    const { formId, enccode: inputEnccode } = req.body || {};
-    if (!formId || !inputEnccode) return res.status(400).json({ ok: false, error: 'formId and enccode required' });
-    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
-    const [form, validationContext] = await Promise.all([
-      loadValidationForm(formId),
-      resolveEncounterDetails(inputEnccode),
-    ]);
-
-    const validations = await loadFormValidations(formId);
+    const validationContext = await resolveEncounterDetails(inputEnccode, inputHpercode);
+    const resolvedHpercode = validationContext.encounter.hpercode || String(inputHpercode || '').trim();
+    const patient = await fetchPatientDetails(resolvedHpercode);
     const context = {
       enccode: validationContext.encounter.enccode,
-      hpercode: validationContext.encounter.hpercode,
+      hpercode: resolvedHpercode,
       toecode: validationContext.encounterType,
       matchedBy: validationContext.encounter.matchedBy,
       phicclaim: validationContext.henctr?.phicclaim || '',
     };
 
-    // OPTIMIZATION: Execute all validations in parallel instead of sequentially
-    const results = await Promise.all(
-      validations.map(validation => executeMappedValidation(validation, context))
-    );
-
-    const summary = summarizeValidationResults(results);
-
     res.json({
       ok: true,
-      formId,
-      form,
-      encounter: {
-        requestedEnccode: inputEnccode,
-        resolvedEnccode: validationContext.encounter.enccode,
-        hpercode: validationContext.encounter.hpercode,
-        toecode: validationContext.encounterType,
-        matchedBy: validationContext.encounter.matchedBy,
-        henctr: validationContext.henctr,
-        admissionLog: validationContext.admissionLog,
-        dischargeLog: validationContext.dischargeLog,
-      },
-      validationContext: {
+      data: {
         enccode: context.enccode,
         hpercode: context.hpercode,
         toecode: context.toecode,
         matchedBy: context.matchedBy,
         phicclaim: context.phicclaim,
+        patient,
+        encounter: {
+          requestedEnccode: inputEnccode,
+          requestedHpercode: inputHpercode || '',
+          resolvedEnccode: validationContext.encounter.enccode,
+          resolvedHpercode,
+        },
+        validationContext: {
+          encounter: validationContext.encounter,
+          henctr: validationContext.henctr,
+          patient,
+        },
+        henctr: validationContext.henctr,
+        admissionLog: validationContext.admissionLog,
+        dischargeLog: validationContext.dischargeLog,
       },
-      validations: results,
-      results,
-      summary,
     });
   } catch (error) {
     next(error);
   }
 }
 
-// ===================== UNIVERSAL VALIDATION API =====================
-// Single endpoint that validates any enccode against any validations
-// This is schema-agnostic and purely data-driven from Supabase
+// ===================== VALIDATION QUERY EXECUTION ENDPOINT =====================
+// Executes a prepared validation query and returns if results exist
+// Called by frontend after fetching validation rules and encounter data
 
-async function validateEncounter(req, res, next) {
+async function executeValidationQuery(req, res, next) {
   try {
-    const { enccode: inputEnccode, validationIds = [] } = req.body || {};
-    if (!inputEnccode) return res.status(400).json({ ok: false, error: 'enccode required' });
-    if (!supabase || typeof supabase.from !== 'function') return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
+    const { query, enccode, hpercode, validationId, description } = req.body || {};
+    if (!query) {
+      return res.status(400).json({ ok: false, error: 'query required' });
+    }
 
-    const validationContext = await resolveEncounterDetails(inputEnccode);
-    const context = {
-      enccode: validationContext.encounter.enccode,
-      hpercode: validationContext.encounter.hpercode,
-      toecode: validationContext.encounterType,
-      matchedBy: validationContext.encounter.matchedBy,
-      phicclaim: validationContext.henctr?.phicclaim || '',
+    // Keep the original enccode first because some encounter tables store the
+    // full token, including the timestamp suffix. Fall back to the normalized
+    // base only if the first attempt returns no rows.
+    const originalEnccode = String(enccode || '').trim();
+    const normalizedEnccode = originalEnccode ? originalEnccode.split('/')[0].trim() : '';
+
+    const buildProcessedQuery = (encValue) => {
+      let processedQuery = query;
+      processedQuery = replaceValidationPlaceholder(processedQuery, 'enccode', encValue);
+      processedQuery = replaceValidationPlaceholder(processedQuery, 'hpercode', hpercode);
+      return processedQuery;
     };
 
-    // If specific validationIds provided, load only those
-    let validations = [];
-    if (validationIds.length > 0) {
-      const { data, error } = await supabase
-        .from('validation')
-        .select('id, description, query, created_at')
-        .in('id', validationIds);
-      if (error) throw error;
-      validations = data || [];
-    } else {
-      // Otherwise, return validation context without running any
-      return res.json({
-        ok: true,
-        enccode: inputEnccode,
-        encounter: {
-          requestedEnccode: inputEnccode,
-          resolvedEnccode: validationContext.encounter.enccode,
-          hpercode: validationContext.encounter.hpercode,
-          toecode: validationContext.encounterType,
-          matchedBy: validationContext.encounter.matchedBy,
-        },
-        validationContext: context,
-        results: [],
-        summary: { total: 0, passed: 0, failed: 0, allPassed: true, missing: [] },
+    const queryCandidates = [];
+    if (originalEnccode) {
+      queryCandidates.push({
+        source: 'original',
+        enccodeValue: originalEnccode,
+        processedQuery: buildProcessedQuery(originalEnccode),
+      });
+    }
+    if (normalizedEnccode && normalizedEnccode !== originalEnccode) {
+      queryCandidates.push({
+        source: 'normalized',
+        enccodeValue: normalizedEnccode,
+        processedQuery: buildProcessedQuery(normalizedEnccode),
       });
     }
 
-    // OPTIMIZATION: Execute all validations in parallel instead of sequentially
-    const results = await Promise.all(
-      validations.map(validation => executeMappedValidation(validation, context))
-    );
+    if (queryCandidates.length === 0) {
+      queryCandidates.push({
+        source: 'empty',
+        enccodeValue: '',
+        processedQuery: buildProcessedQuery(''),
+      });
+    }
 
-    const summary = summarizeValidationResults(results);
+    let executionResult = null;
+    let lastError = null;
 
-    res.json({
-      ok: true,
-      enccode: inputEnccode,
-      encounter: {
-        requestedEnccode: inputEnccode,
-        resolvedEnccode: validationContext.encounter.enccode,
-        hpercode: validationContext.encounter.hpercode,
-        toecode: validationContext.encounterType,
-        matchedBy: validationContext.encounter.matchedBy,
-      },
-      validationContext: context,
-      results,
-      summary,
-    });
+    for (const candidate of queryCandidates) {
+      try {
+        console.log('Executing validation query:', {
+          validationId,
+          description,
+          originalEnccode: originalEnccode,
+          normalizedEnccode: normalizedEnccode,
+          hpercode,
+          candidateSource: candidate.source,
+          query: query,
+          processedQuery: candidate.processedQuery,
+        });
+
+        console.log('About to execute processed query:', candidate.processedQuery);
+        const [rows] = await pool.query(candidate.processedQuery);
+
+        const success = Array.isArray(rows) ? rows.length > 0 : Boolean(rows);
+        const info = {
+          rowCount: Array.isArray(rows) ? rows.length : 0,
+          sample: Array.isArray(rows) ? rows.slice(0, 5) : rows,
+          usedEnccode: candidate.enccodeValue,
+          enccodeSource: candidate.source,
+        };
+
+        console.log('Validation result:', {
+          validationId,
+          description,
+          candidateSource: candidate.source,
+          success,
+          rowCount: info.rowCount,
+          hasSample: !!info.sample?.length,
+          firstRow: Array.isArray(rows) && rows.length > 0 ? rows[0] : null,
+        });
+
+        executionResult = {
+          ok: true,
+          validationId: validationId || null,
+          description: description || '',
+          query: candidate.processedQuery,
+          success,
+          info,
+        };
+
+        if (success || candidate.source === 'normalized' || queryCandidates.length === 1) {
+          break;
+        }
+
+        // If the original enccode returns no rows, try the normalized one.
+        if (candidate.source === 'original') {
+          continue;
+        }
+
+      } catch (error) {
+        lastError = error;
+        console.warn('Validation query candidate failed:', {
+          validationId,
+          description,
+          candidateSource: candidate.source,
+          error: error && error.message ? error.message : error,
+        });
+      }
+    }
+
+    if (executionResult) {
+      return res.json(executionResult);
+    }
+
+    throw lastError || new Error('Validation query execution failed');
   } catch (error) {
-    next(error);
+    console.error('executeValidationQuery error:', error);
+    res.status(400).json({
+      ok: false,
+      error: error.message || 'Query execution failed',
+      details: error.message,
+    });
   }
 }
 
-// Debug endpoint to test Supabase connectivity from the running backend
-async function debugSupabase(req, res, next) {
-  try {
-    if (!supabase || typeof supabase.from !== 'function') {
-      return res.status(500).json({ ok: false, error: 'Supabase client not configured on server' });
-    }
-
-    // Try a minimal lookup against the `validation` table
-    const { data, error } = await supabase.from('validation').select('id').limit(1);
-    if (error) {
-      return res.status(500).json({ ok: false, error: error.message || String(error) });
-    }
-
-    res.json({ ok: true, data: data || [] });
-  } catch (err) {
-    next(err);
-  }
-}
 
 module.exports = {
-  listHospitalForms,
-  listValidations,
-  getFormValidations,
-  createFormValidatorMapping,
-  createFormValidation,
-  deleteFormValidation,
-  runFormValidations,
-  validateEncounter,
-  debugSupabase,
+  getValidationData,
+  executeValidationQuery,
 };
