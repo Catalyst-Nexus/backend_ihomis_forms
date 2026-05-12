@@ -1,5 +1,4 @@
 const express = require("express");
-const multer = require("multer");
 
 // Health & Status endpoints
 const {
@@ -26,10 +25,8 @@ const {
 // Lab Upload endpoints
 const {
   getOrdersForEncounter,
-  registerLabResultUpload,
   debugSchema,
   debugSampleData,
-  getPatientUploadedFiles,
 } = require("../controllers/labUploadController");
 
 // Form endpoints
@@ -52,23 +49,6 @@ const {
 } = require("../controllers/userController");
 
 const router = express.Router();
-
-// Multer configuration for lab result uploads (multipart/form-data)
-const labUploadMulter = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
-  fileFilter: (req, file, cb) => {
-    const fileName = String(file.originalname || "").toLowerCase();
-    const isPdf =
-      file.mimetype === "application/pdf" || fileName.endsWith(".pdf");
-
-    if (isPdf) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only PDF files are allowed"), false);
-    }
-  },
-});
 
 // Health & Status routes
 router.get("/status", dbStatus);
@@ -102,10 +82,6 @@ router.get(
 // NOTE: This route MUST come before /patients/history/:hpercode to avoid route conflict
 router.get("/patients/:hpercode/encounters", getEncountersForPatient);
 
-// GET /api/db/patients/:hpercode/uploaded-files
-// Fetch all uploaded lab result files for a patient from Supabase
-router.get("/patients/:hpercode/uploaded-files", getPatientUploadedFiles);
-
 // Form routes
 router.get("/forms/baby", listBabyFormRecords);
 router.get("/forms/validation", validateFormRecords);
@@ -129,17 +105,5 @@ router.get("/users/:userId", getUserById);
 // GET /api/db/encounters/:enccode/orders
 // Fetch lab/radiology orders for an encounter (from hdocord)
 router.get("/encounters/:enccode/orders", getOrdersForEncounter);
-
-// POST /api/db/lab-results
-// Upload a lab result PDF:
-//   1. Validate patient + encounter exist in MySQL
-//   2. Upload PDF to Supabase storage
-//   3. Insert metadata into lab_result_uploads table
-//   4. Return docointkey for tracking
-router.post(
-  "/lab-results",
-  labUploadMulter.single("file"),
-  registerLabResultUpload,
-);
 
 module.exports = router;
