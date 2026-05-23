@@ -181,8 +181,8 @@ async function getPatientList(req, res, next) {
       LEFT JOIN hregion r ON c.ctyreg = r.regcode
       LEFT JOIN fhud_hospital fh ON p.hfhudcode = fh.hfhudcode
       ${whereClause}
-      ORDER BY p.patlast, p.patfirst
-      LIMIT ? OFFSET ?
+      ORDER BY p.hpercode  DESC
+            LIMIT ? OFFSET ?
     `;
 
     const countQuery = `
@@ -489,7 +489,7 @@ async function searchPatients(req, res, next) {
       INNER JOIN henctr ON henctr.enccode = hdocord.enccode
       LEFT JOIN hperson ON hperson.hpercode = henctr.hpercode
       WHERE ${baseWhere}
-      ORDER BY patlast, patfirst, henctr.hpercode
+      ORDER BY henctr.hpercode DESC
       LIMIT ? OFFSET ?
     `;
     const [patientIds] = await pool.query(patientIdsSql, [...baseParams, limit, offset]);
@@ -514,7 +514,7 @@ async function searchPatients(req, res, next) {
             OR patmiddle LIKE ?
             OR hpercode LIKE ?
             OR CONCAT_WS(' ', patlast, patfirst) LIKE ?
-         ORDER BY patlast, patfirst
+         ORDER BY hpercode DESC
          LIMIT ? OFFSET ?`,
         [keywordLike, keywordLike, keywordLike, keywordLike, keywordLike, limit, offset]
       );
