@@ -305,14 +305,26 @@ async function verifyPassword(req, res, next) {
     // Fetch user by email (include password for verification)
     const query = `
       SELECT
-        id AS user_id,
-        username,
-        email,
-        password AS stored_hash
+        u.id AS user_id,
+        u.username,
+        u.email,
+        u.password AS stored_hash,
+        hp.firstname,
+        hp.lastname,
+        hp.middlename,
+        hp.deptcode,
+        CONCAT(
+          COALESCE(hp.firstname, ''),
+          IF(hp.middlename IS NOT NULL AND hp.middlename != '', CONCAT(' ', hp.middlename), ''),
+          ' ',
+          COALESCE(hp.lastname, '')
+        ) AS full_name
       FROM
-        users
+        users u
+      LEFT JOIN
+        hpersonal hp ON u.id = hp.employeeid
       WHERE
-        email = ?
+        u.email = ?
     `;
 
     const [rows] = await pool.query(query, [email]);
