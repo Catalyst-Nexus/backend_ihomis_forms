@@ -18,6 +18,11 @@ async function listChartTrackingRecords(req, res, next) {
       });
     }
 
+    // Pagination params
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 30));
+    const offset = (page - 1) * limit;
+
     const { whereClause, params } = buildChartTrackingWhereClause(filters);
 
     const [rows] = await pool.query(
@@ -76,14 +81,36 @@ async function listChartTrackingRecords(req, res, next) {
                 hp.patmiddle, hp.patsuffix, hp.patsex, hadm.admdate, hadm.disdate,
                 hadm.distime, hadm.pho_hospital_number, hen.toecode, hadm.typadm,
                 hen.encdate, hen.encstat
-       ORDER BY sort_date DESC, hen.encdate DESC`,
+       ORDER BY sort_date DESC, hen.encdate DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
+
+    // Get total count for pagination
+    const [countResult] = await pool.query(
+      `SELECT COUNT(DISTINCT hen.enccode) AS total
+       FROM henctr hen
+       INNER JOIN hperson hp ON hp.hpercode = hen.hpercode
+       LEFT JOIN hadmlog hadm ON hadm.enccode = hen.enccode
+       LEFT JOIN herlog er ON er.enccode = hen.enccode
+       LEFT JOIN hopdlog opl ON opl.enccode = hen.enccode
+       LEFT JOIN hactrack act ON act.enccode = hen.enccode
+       LEFT JOIN hphiclaim ph ON ph.enccode = hen.enccode
+       LEFT JOIN hphicclaimmap pcm ON pcm.enccode = hen.enccode
+       LEFT JOIN hpatacct pa ON pa.enccode = hen.enccode
+       ${whereClause}`,
       params,
     );
+    const total = countResult[0]?.total || 0;
 
     return res.json({
       ok: true,
       data: formatChartTrackingRecords(rows),
       count: rows.length,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
       filters: {
         type: filters.type || "All",
         hpercode: filters.hpercode || null,
