@@ -599,6 +599,7 @@ async function searchPatients(req, res, next) {
     const [rows] = await pool.query(
       `SELECT
         MAX(henctr.enccode) AS enccode,
+        MAX(henctr.acctno) AS enc,
         MAX(henctr.fhud) AS fhud,
         MAX(hdocord.docointkey) AS docointkey,
         MAX(hdocord.entryby) AS user,
@@ -625,6 +626,7 @@ async function searchPatients(req, res, next) {
     const data = rows.map((row) => ({
       ...mapPatientRow(row),
       enccode: row.enccode || "",
+      enc: row.enc || "",
       fhud: row.fhud || "",
       docointkey: row.docointkey || "",
       user: row.user || "",
