@@ -2,16 +2,30 @@ const { mapSex } = require("./dbHelpers");
 
 const SUPPORTED_CHART_TRACKING_TYPES = ["ER", "OPD", "ADM"];
 
-const CHART_TRACKING_TYPE_SQL = `
+// Earliest discharge date included in chart tracking. Configurable via env so it
+// can be changed per deployment without a code change;
+const TRACKING_DISCHARGE_START_DATE = String(
+  process.env.VITE_SUPABASE_TRACKING_DISCHARGE_START_DATE,
+).trim();
+
+// Builds the encounter-type CASE expression using the given table aliases for
+// henctr/hadmlog. The deferred-join query needs to evaluate this against a
+// paginated subquery whose columns are exposed under a single alias, so the
+// alias is parameterized rather than hard-coded to hen/hadm.
+function chartTrackingTypeSql(henAlias = "hen", hadmAlias = "hadm") {
+  return `
   CASE
-    WHEN UPPER(COALESCE(hen.toecode, '')) LIKE '%ER%' OR UPPER(COALESCE(hen.toecode, '')) IN ('E') THEN 'ER'
-    WHEN UPPER(COALESCE(hen.toecode, '')) IN ('OPD', 'OP', 'O') THEN 'OPD'
-    WHEN UPPER(COALESCE(hen.toecode, '')) IN ('ADM', 'IPD', 'A', 'INP') THEN 'ADM'
-    WHEN COALESCE(hadm.typadm, '') <> '' THEN 'ADM'
-    WHEN COALESCE(hadm.admdate, '') <> '' OR COALESCE(hadm.disdate, '') <> '' THEN 'ADM'
+    WHEN UPPER(COALESCE(${henAlias}.toecode, '')) LIKE '%ER%' OR UPPER(COALESCE(${henAlias}.toecode, '')) IN ('E') THEN 'ER'
+    WHEN UPPER(COALESCE(${henAlias}.toecode, '')) IN ('OPD', 'OP', 'O') THEN 'OPD'
+    WHEN UPPER(COALESCE(${henAlias}.toecode, '')) IN ('ADM', 'IPD', 'A', 'INP') THEN 'ADM'
+    WHEN COALESCE(${hadmAlias}.typadm, '') <> '' THEN 'ADM'
+    WHEN COALESCE(${hadmAlias}.admdate, '') <> '' OR COALESCE(${hadmAlias}.disdate, '') <> '' THEN 'ADM'
     ELSE 'UNKNOWN'
   END
 `;
+}
+
+const CHART_TRACKING_TYPE_SQL = chartTrackingTypeSql("hen", "hadm");
 
 function normalizeChartTrackingFilters(query = {}) {
   return {
@@ -80,6 +94,25 @@ function buildChartTrackingWhereClause(filters = {}) {
   if (!filters.type) {
     conditions.push(`(${CHART_TRACKING_TYPE_SQL}) <> 'UNKNOWN'`);
   }
+
+  // Only discharged records that carry a PhilHealth claim. Discharge is
+  // type-aware because an encounter lives in exactly one of the three logs:
+  // ADM -> hadmlog.disdate, ER -> herlog.erdtedis, OPD -> hopdlog.opddtedis.
+  // COALESCE(...,'') <> '' treats both NULL and the legacy empty-string as
+  // "not discharged" (matching the pattern used elsewhere for these fields).
+  // Requires the herlog (er) and hopdlog (opl) joins on the consuming query.
+  // Discharge date (type-relevant) must be on or after the configured start date.
+  conditions.push(`(
+    ((${CHART_TRACKING_TYPE_SQL}) = 'ADM' AND COALESCE(hadm.disdate, '') <> '' AND DATE(hadm.disdate) >= ?) OR
+    ((${CHART_TRACKING_TYPE_SQL}) = 'ER'  AND COALESCE(er.erdtedis, '') <> '' AND DATE(er.erdtedis) >= ?) OR
+    ((${CHART_TRACKING_TYPE_SQL}) = 'OPD' AND COALESCE(opl.opddtedis, '') <> '' AND DATE(opl.opddtedis) >= ?)
+  )`);
+  params.push(
+    TRACKING_DISCHARGE_START_DATE,
+    TRACKING_DISCHARGE_START_DATE,
+    TRACKING_DISCHARGE_START_DATE,
+  );
+  conditions.push("UPPER(COALESCE(hen.phicclaim, '')) = 'Y'");
 
   return {
     conditions,
@@ -248,6 +281,7 @@ function formatChartTrackingRecords(rows) {
 module.exports = {
   SUPPORTED_CHART_TRACKING_TYPES,
   CHART_TRACKING_TYPE_SQL,
+  chartTrackingTypeSql,
   normalizeChartTrackingFilters,
   isSupportedChartTrackingType,
   buildChartTrackingWhereClause,

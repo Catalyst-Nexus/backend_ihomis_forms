@@ -29,7 +29,10 @@ async function getUsers(req, res, next) {
   try {
     const search = String(req.query.search || "").trim();
     const active = req.query.active;
-    const limit = Math.min(parseInt(req.query.limit) || 50, 1000);
+    // When no `limit` query param is provided, return ALL matching users (no cap).
+    // When provided, honor it for pagination (capped at 5000 as a safety ceiling).
+    const hasLimit = req.query.limit !== undefined && req.query.limit !== "";
+    const limit = Math.min(parseInt(req.query.limit) || 50, 5000);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
 
     let query = `
@@ -44,7 +47,7 @@ async function getUsers(req, res, next) {
         hp.lastname,
         hp.middlename,
         hp.postitle,
-        hp.deptcode,
+        u.deptcode,
         hp.contactno,
         CONCAT(
           COALESCE(hp.firstname, ''),
@@ -84,9 +87,12 @@ async function getUsers(req, res, next) {
       params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
-    // Order and pagination
-    query += ` ORDER BY hp.lastname, hp.firstname LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
+    // Order and pagination — only apply LIMIT/OFFSET when a limit was explicitly requested
+    query += ` ORDER BY hp.lastname, hp.firstname`;
+    if (hasLimit) {
+      query += ` LIMIT ? OFFSET ?`;
+      params.push(limit, offset);
+    }
 
     const [rows] = await pool.query(query, params);
 
@@ -127,10 +133,10 @@ async function getUsers(req, res, next) {
       data: rows,
       pagination: {
         total,
-        limit,
-        offset,
-        pages: Math.ceil(total / limit),
-        current_page: Math.floor(offset / limit) + 1,
+        limit: hasLimit ? limit : null,
+        offset: hasLimit ? offset : 0,
+        pages: hasLimit ? Math.ceil(total / limit) : 1,
+        current_page: hasLimit ? Math.floor(offset / limit) + 1 : 1,
       },
     });
   } catch (error) {
@@ -172,7 +178,7 @@ async function getUserById(req, res, next) {
         hp.lastname,
         hp.middlename,
         hp.postitle,
-        hp.deptcode,
+        u.deptcode,
         hp.contactno,
         hp.extensionname,
         hp.mobilenumber,
@@ -240,7 +246,7 @@ async function searchUserByEmployeeId(req, res, next) {
         hp.lastname,
         hp.middlename,
         hp.postitle,
-        hp.deptcode,
+        u.deptcode,
         CONCAT(
           COALESCE(hp.firstname, ''),
           IF(hp.middlename IS NOT NULL AND hp.middlename != '', CONCAT(' ', hp.middlename), ''),
@@ -312,7 +318,7 @@ async function verifyPassword(req, res, next) {
         hp.firstname,
         hp.lastname,
         hp.middlename,
-        hp.deptcode,
+        u.deptcode,
         CONCAT(
           COALESCE(hp.firstname, ''),
           IF(hp.middlename IS NOT NULL AND hp.middlename != '', CONCAT(' ', hp.middlename), ''),
