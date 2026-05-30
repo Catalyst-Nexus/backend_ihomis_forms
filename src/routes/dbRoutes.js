@@ -46,6 +46,7 @@ const {
   getUsers,
   getUserById,
   searchUserByEmployeeId,
+  verifyPassword,
 } = require("../controllers/userController");
 
 const router = express.Router();
@@ -92,6 +93,7 @@ router.get("/chart-tracking/summary", getChartTrackingSummary);
 
 // User routes
 router.get("/users", getUsers);
+router.post("/users/verify-password", verifyPassword);
 router.get("/users/by-employee/:employeeId", searchUserByEmployeeId);
 router.get("/users/:userId", getUserById);
 

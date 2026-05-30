@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const bcrypt = require("bcrypt");
 
 /**
  * GET /api/db/users
@@ -52,9 +53,9 @@ async function getUsers(req, res, next) {
           COALESCE(hp.lastname, '')
         ) AS full_name
       FROM
-        adnph_ihomis_plus.users u
+        users u
       LEFT JOIN
-        adnph_ihomis_plus.hpersonal hp ON u.id = hp.employeeid
+        hpersonal hp ON u.id = hp.employeeid
       WHERE
         u.deleted_at IS NULL
     `;
@@ -92,8 +93,8 @@ async function getUsers(req, res, next) {
     // Get total count
     let countQuery = `
       SELECT COUNT(*) as total
-      FROM adnph_ihomis_plus.users u
-      LEFT JOIN adnph_ihomis_plus.hpersonal hp ON u.id = hp.employeeid
+      FROM users u
+      LEFT JOIN hpersonal hp ON u.id = hp.employeeid
       WHERE u.deleted_at IS NULL
     `;
     const countParams = [];
@@ -182,9 +183,9 @@ async function getUserById(req, res, next) {
           COALESCE(hp.lastname, '')
         ) AS full_name
       FROM
-        adnph_ihomis_plus.users u
+        users u
       LEFT JOIN
-        adnph_ihomis_plus.hpersonal hp ON u.id = hp.employeeid
+        hpersonal hp ON u.id = hp.employeeid
       WHERE
         u.id = ? AND u.deleted_at IS NULL
     `;
@@ -247,9 +248,9 @@ async function searchUserByEmployeeId(req, res, next) {
           COALESCE(hp.lastname, '')
         ) AS full_name
       FROM
-        adnph_ihomis_plus.users u
+        users u
       LEFT JOIN
-        adnph_ihomis_plus.hpersonal hp ON u.id = hp.employeeid
+        hpersonal hp ON u.id = hp.employeeid
       WHERE
         hp.employeeid = ? AND u.deleted_at IS NULL
     `;
@@ -277,8 +278,84 @@ async function searchUserByEmployeeId(req, res, next) {
   }
 }
 
+/**
+ * POST /api/db/users/verify-password
+ * 
+ * Check if email exists in the system
+ * 
+ * Request Body/Query:
+ * - email: User email (required)
+ * 
+ * Response:
+ * - ok: true if email exists, false otherwise
+ * - data: User info if found
+ */
+async function verifyPassword(req, res, next) {
+  try {
+    const email = req.body?.email || req.query?.email;
+    const password = req.body?.password || req.query?.password;
+
+    if (!email) {
+      return res.status(400).json({
+        ok: false,
+        message: "Email is required",
+      });
+    }
+
+    // Fetch user by email (include password for verification)
+    const query = `
+      SELECT
+        id AS user_id,
+        username,
+        email,
+        password AS stored_hash
+      FROM
+        users
+      WHERE
+        email = ?
+    `;
+
+    const [rows] = await pool.query(query, [email]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        message: "Email not found",
+      });
+    }
+
+    const user = rows[0];
+    const storedHash = user.stored_hash;
+    delete user.stored_hash; // Don't expose hash in response
+
+    // Verify password if provided
+    let passwordValid = null;
+    let compatibleHash = null;
+    if (password && storedHash) {
+      // Convert PHP bcrypt hash ($2y$) to Node.js compatible ($2a$)
+      compatibleHash = storedHash.replace(/^\$2y\$/, "$2a$");
+      passwordValid = await bcrypt.compare(password, compatibleHash);
+    }
+
+    res.json({
+      ok: true,
+      message: passwordValid ? "Password verified" : "Email exists",
+      data: user,
+      passwordValid: passwordValid
+    });
+  } catch (error) {
+    console.error("Error verifying email:", error);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to verify email",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+}
+
 module.exports = {
   getUsers,
   getUserById,
   searchUserByEmployeeId,
+  verifyPassword,
 };
